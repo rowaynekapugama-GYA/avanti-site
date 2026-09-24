@@ -1,0 +1,57 @@
+product,filename,url,bytes
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-600x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-600x400mm.pdf,216756
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-600x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-600x600mm.pdf,214642
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-600x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-600x800mm.pdf,214139
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-800x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-800x1200mm.pdf,201194
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-1200x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-1200x1200mm.pdf,194131
+corflute-signs,ARTWORK-SPEC-FORM-Corflute-Sign-1200x2400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Corflute-Sign-1200x2400mm.pdf,199655
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x400mm.pdf,214028
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x600mm.pdf,215966
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-600x800mm.pdf,211906
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-800x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-800x1200mm.pdf,195418
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-1200x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-1200x1200mm.pdf,200170
+acm-panels,ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-1200x2400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Aluminium-Composite-Panel-1200x2400mm.pdf,188905
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-600x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-600x400mm.pdf,215972
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-600x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-600x600mm.pdf,217319
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-600x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-600x800mm.pdf,207688
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-800x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-800x1200mm.pdf,198471
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-1200x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-1200x1200mm.pdf,195335
+foamboard,ARTWORK-SPEC-FORM-Foam-Board-1200x2400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-Board-1200x2400mm.pdf,192353
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-600x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-600x400mm.pdf,216445
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-600x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-600x600mm.pdf,212131
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-600x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-600x800mm.pdf,211569
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-800x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-800x1200mm.pdf,191677
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-1200x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-1200x1200mm.pdf,197407
+foam-pvc,ARTWORK-SPEC-FORM-Foam-PVC-1200x2400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Foam-PVC-1200x2400mm.pdf,198571
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-600x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-600x400mm.pdf,216727
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-600x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-600x600mm.pdf,216930
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-600x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-600x800mm.pdf,214290
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-800x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-800x1200mm.pdf,201578
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-1200x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-1200x1200mm.pdf,193346
+enviroboard,ARTWORK-SPEC-FORM-Enviro-Board-1200x2400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Enviro-Board-1200x2400mm.pdf,197841
+posters,ARTWORK-SPEC-FORM-Posters-210x297mm-A4.pdf,assets/templates/ARTWORK-SPEC-FORM-Posters-210x297mm-A4.pdf,195140
+posters,ARTWORK-SPEC-FORM-Posters-297x420mm-A3.pdf,assets/templates/ARTWORK-SPEC-FORM-Posters-297x420mm-A3.pdf,202053
+posters,ARTWORK-SPEC-FORM-Posters-420x594mm-A2.pdf,assets/templates/ARTWORK-SPEC-FORM-Posters-420x594mm-A2.pdf,196082
+posters,ARTWORK-SPEC-FORM-Poster-841x594mm-A1.pdf,assets/templates/ARTWORK-SPEC-FORM-Poster-841x594mm-A1.pdf,202399
+posters,ARTWORK-SPEC-FORM-Poster-841x1189mm-A0.pdf,assets/templates/ARTWORK-SPEC-FORM-Poster-841x1189mm-A0.pdf,197120
+posters,ARTWORK-SPEC-FORM-Posters-894x841mm-A1.pdf,assets/templates/ARTWORK-SPEC-FORM-Posters-894x841mm-A1.pdf,201609
+window-graphics,ARTWORK-SPEC-FORM-WIndow-DecaL-300x400mm.pdf,assets/templates/ARTWORK-SPEC-FORM-WIndow-DecaL-300x400mm.pdf,215628
+window-graphics,ARTWORK-SPEC-FORM-WIndow-DecaL-400x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-WIndow-DecaL-400x600mm.pdf,210046
+window-graphics,ARTWORK-SPEC-FORM-WIndow-DecaL-800x600mm.pdf,assets/templates/ARTWORK-SPEC-FORM-WIndow-DecaL-800x600mm.pdf,214525
+window-graphics,ARTWORK-SPEC-FORM-WIndow-DecaL-1000x800mm.pdf,assets/templates/ARTWORK-SPEC-FORM-WIndow-DecaL-1000x800mm.pdf,218602
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-300x300mm-Square-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-300x300mm-Square-cut.pdf,217169
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-300x300mm-round-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-300x300mm-round-cut.pdf,210265
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-400x400mm-Square-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-400x400mm-Square-cut.pdf,212501
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-400x400mm-round-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-400x400mm-round-cut.pdf,214188
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-600x600mm-Square-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-600x600mm-Square-cut.pdf,217927
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-600x600mm-round-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-600x600mm-round-cut.pdf,214134
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-800x800mm-Square-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-800x800mm-Square-cut.pdf,214589
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-800x800mm-round-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-800x800mm-round-cut.pdf,218788
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-1000x1000mm-Square-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-1000x1000mm-Square-cut.pdf,217614
+floor-decals,ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-1000x1000mm-round-cut.pdf,assets/templates/ARTWORK-SPEC-FORM-FLOOR-DECAL-ROUND-1000x1000mm-round-cut.pdf,215597
+a-frames (metal face),ARTWORK-SPEC-FORM-A-Frame-600x900mm.pdf,assets/templates/ARTWORK-SPEC-FORM-A-Frame-600x900mm.pdf,247548
+a-frames (metal face),ARTWORK-SPEC-FORM-A-Frame-900x1200mm.pdf,assets/templates/ARTWORK-SPEC-FORM-A-Frame-900x1200mm.pdf,239816
+a-frames (corflute insertable),ARTWORK-SPEC-FORM-A-Frame-600x900mm-Insertable.pdf,assets/templates/ARTWORK-SPEC-FORM-A-Frame-600x900mm-Insertable.pdf,299160
+a-frames (corflute insertable),ARTWORK-SPEC-FORM-A-Frame-1200x900mm-Insertable.pdf,assets/templates/ARTWORK-SPEC-FORM-A-Frame-1200x900mm-Insertable.pdf,296730
+pull-up-banners,ARTWORK-SPEC-FORM-Roll-Up-Banner-2200x850mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Roll-Up-Banner-2200x850mm.pdf,193703
+pull-up-banners,ARTWORK-SPEC-FORM-Roll-Up-Banner-1400x850mm.pdf,assets/templates/ARTWORK-SPEC-FORM-Roll-Up-Banner-1400x850mm.pdf,198790

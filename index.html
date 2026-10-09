@@ -57,6 +57,86 @@
     media: { id: true, d: {}, adminOnly: true },
     profiles: { key: 'user_id', d: {} },
   };
+  // ---- orders & marketing (sample data so the new screens can be tried before Supabase exists)
+  const OPS = {
+    customers: { uuid: true, d: { name: null, phone: null, state: null, postcode: null, tags: [], marketing_status: 'not_subscribed', consent_basis: null, consent_at: null, consent_source: null, consent_ip: null, unsubscribed_at: null, suppressed: false, suppressed_reason: null }, adminOnly: true },
+    orders: { uuid: true, d: { status: 'pending_payment', delivery_cents: 0, gst_cents: 0, currency: 'AUD', marketing_opt_in: false, delivery_quote_required: false }, adminOnly: true },
+    order_items: { id: true, d: { options: {} }, adminOnly: true },
+    order_events: { id: true, d: {}, adminOnly: true },
+    email_log: { uuid: true, d: { status: 'logged', provider: 'demo' }, adminOnly: true },
+    consent_log: { id: true, d: { actor: 'customer' }, adminOnly: true },
+    segments: { uuid: true, d: { rules: { match: 'all', rules: [] } }, adminOnly: true },
+    campaigns: { uuid: true, d: { status: 'draft', blocks: [], preview_text: null, segment_id: null, series: null, scheduled_at: null, sent_at: null, recipients: null }, adminOnly: true },
+    automation_flows: { key: 'key', d: { enabled: false }, adminOnly: true },
+    automation_sends: { id: true, d: {}, adminOnly: true },
+    audit_log: { id: true, d: {}, adminOnly: true },
+    webhook_events: { id: true, d: {}, adminOnly: true },
+    customer_stats: { computed: true, d: {}, adminOnly: true },
+  };
+  Object.assign(TABLES, OPS);
+  const PAIDS = ['paid', 'in_production', 'dispatched', 'delivered'];
+  function customerStats() {
+    return db.t.customers.map(c => { const os = db.t.orders.filter(o => o.email === c.email && PAIDS.includes(o.status));
+      const cats = new Set(); os.forEach(o => db.t.order_items.filter(i => i.order_id === o.id).forEach(i => i.category_slug && cats.add(i.category_slug)));
+      return { customer_id: c.id, email: c.email, paid_orders: os.length, total_spent_cents: os.reduce((s, o) => s + o.total_cents, 0),
+        last_order_at: os.map(o => o.paid_at).sort().pop() || null, categories: [...cats] }; });
+  }
+  function seedOps() {
+    Object.keys(OPS).forEach(k => { if (!OPS[k].computed && !db.t[k]) db.t[k] = []; });
+    if (db.t.orders.length || db.t.campaigns.length) return;
+    const ago = d => new Date(Date.now() - d * 86400000).toISOString(), uid = () => crypto.randomUUID();
+    const P = s => db.t.products.find(p => p.slug === s) || { slug: s, name: s, category_slug: null };
+    const people = [['sarah@blakehurstcafe.com.au', 'Sarah Nguyen', 'NSW', 'checkout_opt_in', 40], ['orders@parramattaflorist.com.au', 'Dimitri Kalos', 'NSW', 'footer_signup', 120],
+      ['hello@byronbakes.com.au', 'Mia Thompson', 'NSW', 'checkout_opt_in', 200], ['admin@melbournemovers.com.au', 'Raj Patel', 'VIC', 'imported_list', 300],
+      ['events@brisbanegala.org.au', 'Chloe Martin', 'QLD', null, 0], ['jess.k@example.com', 'Jess Kim', 'NSW', 'footer_signup', 10], ['old.address@example.com', 'Tom Reid', 'SA', 'footer_signup', 400]];
+    people.forEach(([email, name, state, basis, d]) => db.t.customers.push(withDefaults('customers', { id: uid(), email, name, state, tags: email.includes('movers') ? ['wholesale'] : [],
+      marketing_status: basis ? 'subscribed' : 'not_subscribed', consent_basis: basis, consent_at: basis ? ago(d) : null,
+      consent_source: basis === 'imported_list' ? 'Trade show sign-up sheet, 2025' : basis === 'checkout_opt_in' ? 'Checkout' : basis ? 'Website sign-up form' : null, created_at: ago(d + 1) })));
+    const tom = db.t.customers.find(c => c.email === 'old.address@example.com'); tom.suppressed = true; tom.suppressed_reason = 'Hard bounce';
+    let n = 1001;
+    const mk = (email, status, days, lines, delivery, extra = {}) => {
+      const c = db.t.customers.find(x => x.email === email), id = uid(), sub = lines.reduce((s, l) => s + l[2] * l[1], 0), total = sub + delivery[1];
+      const o = withDefaults('orders', { id, number: 'AVP-' + n++, public_token: uid(), status, email, customer_id: c && c.id, name: c ? c.name : 'Guest', phone: '0400 000 000',
+        shipping_address: { line1: '12 Sample St', suburb: 'Smithfield', state: (c && c.state) || 'NSW', postcode: '2164' }, delivery_method: delivery[0], delivery_cents: delivery[1],
+        subtotal_cents: sub, total_cents: total, gst_cents: Math.round(total / 11), provider: n % 3 ? 'stripe' : 'paypal', provider_ref: status === 'pending_payment' ? null : (n % 3 ? 'pi_demo' : 'CAP-DEMO') + n,
+        created_at: ago(days), paid_at: status === 'pending_payment' || status === 'cancelled' ? null : ago(days - 0.01), marketing_opt_in: !!(c && c.consent_basis === 'checkout_opt_in'), ...extra });
+      db.t.orders.push(o);
+      lines.forEach(([slug, qty, unit, opts, art], i) => { const p = P(slug); db.t.order_items.push(withDefaults('order_items', { order_id: id, position: i, product_slug: slug, name: p.name, category_slug: p.category_slug, qty, unit_cents: unit, line_cents: unit * qty, options: opts || {}, artwork: art || null })); });
+      const flow = ['pending_payment', ...PAIDS].slice(0, status === 'refunded' ? 2 : ['pending_payment', ...PAIDS].indexOf(status) + 1);
+      flow.forEach((s, i) => db.t.order_events.push(withDefaults('order_events', { order_id: id, from_status: i ? flow[i - 1] : null, to_status: s,
+        actor: i === 0 ? 'customer' : i === 1 ? 'webhook:stripe' : 'admin:jo@avantiprint.com.au', note: i === 0 ? 'Checkout started' : null,
+        data: s === 'dispatched' ? { carrier: o.carrier, tracking_number: o.tracking_number } : null, created_at: ago(days - i * 0.6) })));
+      if (status === 'refunded') db.t.order_events.push(withDefaults('order_events', { order_id: id, from_status: 'paid', to_status: 'refunded', actor: 'webhook:stripe', note: 'Refunded in Stripe', created_at: ago(days - 2) }));
+      flow.slice(1).filter(s => s !== 'delivered').forEach((s, i) => db.t.email_log.push(withDefaults('email_log', { id: uid(), kind: 'transactional', template: 'order-' + s, to_email: email, order_id: id,
+        subject: { paid: `Order confirmed: ${o.number}`, in_production: `Your order ${o.number} is in production`, dispatched: `Your order ${o.number} is on its way` }[s], status: 'delivered', delivered_at: ago(days - i), created_at: ago(days - i * 0.6 - 0.01) })));
+      return o;
+    };
+    const banner = ['pull-up-banner', 2, 12000, {}, { files: [{ side: 'Artwork', name: 'cafe-banner-final.pdf', path: null, info: 'Print-ready PDF' }] }];
+    mk('sarah@blakehurstcafe.com.au', 'delivered', 34, [banner], ['Banner Stands: Metro NSW delivery', 3000], { carrier: 'StarTrack', tracking_number: 'ST4471029' });
+    mk('orders@parramattaflorist.com.au', 'dispatched', 6, [['custom-branded-mailer-boxes', 250, 214, { Material: 'White E Flute 1.5mm', 'Size (mm)': '225 × 160 × 80', Printing: 'Single side (outside only)' }]], [null, 0], { carrier: 'Australia Post', tracking_number: '33XYZ0012345', delivery_quote_required: true });
+    mk('hello@byronbakes.com.au', 'in_production', 3, [['name-and-age-cake-topper', 3, 3095, { Name: 'Olivia', Age: '30' }]], ['Cake Toppers: Express delivery', 2000]);
+    mk('admin@melbournemovers.com.au', 'paid', 1, [['pull-up-banner', 6, 10800, {}, { later: true }]], ['Banner Stands: Regional NSW delivery', 5000]);
+    mk('events@brisbanegala.org.au', 'paid', 0.2, [['name-and-age-cake-topper', 1, 3095, { Name: 'Gala', Age: '25' }]], ['Cake Toppers: Standard delivery', 1300]);
+    mk('jess.k@example.com', 'pending_payment', 1.5, [['pull-up-banner', 1, 12000, {}]], ['Banner Stands: Metro NSW delivery', 3000]);
+    mk('sarah@blakehurstcafe.com.au', 'refunded', 60, [['name-and-age-cake-topper', 1, 3095, { Name: 'Leo', Age: '5' }]], ['Cake Toppers: Standard delivery', 1300], { refunded_at: ago(58) });
+    const seg = withDefaults('segments', { id: uid(), name: 'NSW packaging buyers', rules: { match: 'all', rules: [{ field: 'category', op: 'includes', value: 'mailer-boxes' }, { field: 'state', op: 'in', value: ['NSW'] }] }, created_at: ago(20) });
+    db.t.segments.push(seg);
+    const blocks = t => [{ type: 'heading', text: 'Hi {{first_name}},' }, { type: 'text', html: `<p>${t}</p>` }, { type: 'button', label: 'Shop now', url: '/#/shop' }];
+    const sent = (name, series, subject, days, seg_id, stats) => { const c = withDefaults('campaigns', { id: uid(), name, series, subject, preview_text: 'Made in Western Sydney', blocks: blocks('Our latest range is in. Order by 12pm for next business day dispatch.'), segment_id: seg_id, status: 'sent', sent_at: ago(days), recipients: stats.length, created_at: ago(days + 1) });
+      db.t.campaigns.push(c);
+      stats.forEach(([email, st, op, cl]) => db.t.email_log.push(withDefaults('email_log', { id: uid(), kind: 'campaign', template: 'campaign', to_email: email, campaign_id: c.id, subject, status: st, bounce_reason: st === 'bounced' ? 'Permanent: mailbox does not exist' : null, opened_at: op ? ago(days - 0.2) : null, clicked_at: cl ? ago(days - 0.3) : null, created_at: ago(days) })));
+      return c; };
+    sent('Spring packaging sale', 'spring', '10% off mailer boxes this month', 12, null, [['sarah@blakehurstcafe.com.au', 'delivered', 1, 1], ['orders@parramattaflorist.com.au', 'delivered', 1, 0], ['hello@byronbakes.com.au', 'delivered', 0, 0], ['admin@melbournemovers.com.au', 'delivered', 1, 0], ['old.address@example.com', 'bounced', 0, 0]]);
+    const c2 = sent('Florist follow-up', 'spring', 'Your boxes, your brand', 5, seg.id, [['orders@parramattaflorist.com.au', 'delivered', 1, 1]]);
+    db.t.orders.find(o => o.email === 'orders@parramattaflorist.com.au').campaign_id = c2.id;
+    db.t.campaigns.push(withDefaults('campaigns', { id: uid(), name: 'Christmas banners', series: 'christmas', subject: 'Get your Christmas banners in early', blocks: blocks('Book your Christmas signage now and beat the rush.'), created_at: ago(1) }));
+    const flow = (key, name, description, delay_hours, subject, text, extra = {}) => db.t.automation_flows.push(withDefaults('automation_flows', { key, name, description, delay_hours, subject, preview_text: null, blocks: blocks(text), categories: null, ...extra }));
+    flow('welcome', 'Welcome', 'Sent once to every new subscriber.', 0, 'Welcome to Avanti Print & Design', 'Thanks for subscribing. You will be first to hear about new products and offers.', { enabled: true });
+    flow('abandoned_cart', 'Abandoned checkout', 'Checkout started but no order paid after the delay.', 24, 'Still thinking it over?', 'You started an order but did not finish checking out. It only takes a minute to pick up where you left off.');
+    flow('post_purchase', 'Reorder reminder', 'Sent after a packaging order, when stock is likely running low.', 1440, 'Running low on boxes?', 'It has been a couple of months since your last packaging order.', { categories: ['mailer-boxes', 'shipping-cartons'] });
+    flow('win_back', 'Win-back', 'Customers with no order in the delay period.', 4320, "We've missed you", 'A lot has changed since your last order. Take a look at what is new.');
+    db.t.customers.filter(c => c.consent_basis).forEach(c => db.t.consent_log.push(withDefaults('consent_log', { customer_id: c.id, action: 'subscribe', basis: c.consent_basis, source: c.consent_source, created_at: c.consent_at })));
+  }
   const MONEY = new Set(['base_price', 'price_max', 'price', 'unit_price', 'amount']);
   const clone = x => JSON.parse(JSON.stringify(x));
   const money = r => { for (const k of MONEY) if (r[k] != null && r[k] !== '') r[k] = Math.round(Number(r[k]) * 100) / 100; return r; };
@@ -69,7 +149,7 @@
   function load() {
     if (db) return db;
     try { db = JSON.parse(localStorage.getItem(DB_KEY) || 'null'); } catch (e) { db = null; }
-    if (db && db.v === 1) return db;
+    if (db && db.v === 1) { if (!db.t.automation_flows || !db.t.automation_flows.length) { seedOps(); persist(); } return db; }
     db = { v: 1, seq: 1, t: {} };
     Object.keys(TABLES).forEach(k => db.t[k] = []);
     const seed = typeof GYA !== 'undefined' && GYA.adapter && GYA.adapter.toSeed && GYA.adapter.toSeed();   // GYA is a top-level const, not on window
@@ -86,6 +166,7 @@
       upsertRows('seo_entries', seed.seo_entries || [], 'route');
     }
     db.t.profiles = [{ user_id: UID, role: 'admin', display_name: 'Team GYA' }];
+    seedOps();
     persist();
     return db;
   }
@@ -95,6 +176,8 @@
     const T = TABLES[table], r = Object.assign({}, clone(T.d), row);
     Object.keys(r).forEach(k => r[k] === undefined && delete r[k]);
     if (T.id && r.id == null) r.id = db.seq++;
+    if (T.uuid && r.id == null) r.id = crypto.randomUUID();
+    if (T.uuid && r.created_at == null) r.created_at = now();
     if (T.stamp) r.updated_at = now();
     return money(r);
   }
@@ -167,8 +250,8 @@
     return decodeURIComponent(v);
   }
   function query(table, params, admin) {
-    let rows = db.t[table].slice();
     const T = TABLES[table];
+    let rows = T.computed ? customerStats() : db.t[table].slice();
     if (!admin) {
       if (T.adminOnly) rows = [];
       if (T.visible) rows = rows.filter(r => r[T.visible]);
@@ -176,12 +259,23 @@
     }
     for (const [k, raw] of params) {
       if (['select', 'order', 'limit', 'offset', 'on_conflict'].includes(k)) continue;
-      const m = raw.match(/^(eq|neq|is|in)\.(.*)$/); if (!m) continue;
+      if (k === 'or') {   // or=(col.op.value,col.op.value), used by the search boxes
+        const parts = raw.replace(/^\(|\)$/g, '').split(',').map(p => { const i = p.indexOf('.'), j = p.indexOf('.', i + 1); return [p.slice(0, i), p.slice(i + 1, j), decodeURIComponent(p.slice(j + 1))]; });
+        rows = rows.filter(r => parts.some(([c, o, v]) => cmp(r[c], o, v))); continue; }
+      const m = raw.match(/^(eq|neq|is|in|gte|gt|lte|lt|ilike|not\.is)\.(.*)$/); if (!m) continue;
       const [, op, val] = m;
+      if (!['eq', 'neq', 'is', 'in'].includes(op)) { const v = decodeURIComponent(val); rows = rows.filter(r => cmp(r[k], op, v)); continue; }
       if (op === 'in') { const set = val.replace(/^\(|\)$/g, '').split(',').map(decodeURIComponent); rows = rows.filter(r => set.includes(String(r[k]))); }
       else { const v = parseValue(op, val); rows = rows.filter(r => op === 'neq' ? String(r[k]) !== v : op === 'is' ? r[k] === v || (v === null && r[k] == null) : String(r[k]) === v); }
     }
     return rows;
+  }
+  function cmp(x, op, v) {
+    if (op === 'ilike') { const re = new RegExp('^' + v.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i'); return x != null && re.test(String(x)); }
+    if (op === 'not.is') return v === 'null' ? x != null : x !== (v === 'true');
+    if (x == null) return false;
+    const a = typeof x === 'number' ? x : String(x), b = typeof x === 'number' ? Number(v) : v;
+    return op === 'gte' ? a >= b : op === 'gt' ? a > b : op === 'lte' ? a <= b : op === 'lt' ? a < b : op === 'eq' ? String(x) === v : true;
   }
   function order(rows, spec) {
     if (!spec) return rows;
@@ -221,6 +315,108 @@
     fileUrl(bucket, path) { try { const f = JSON.parse(localStorage.getItem(fileKey(bucket, path)) || 'null'); return f && f.url; } catch (e) { return null; } },
     // demo data, uploads, and the dashboard's own session and cache (gya.<site>.*); the shopper's cart is left alone
     reset() { Object.keys(localStorage).forEach(k => { if (k === DB_KEY || k.startsWith(FILE_KEY) || /^gya\./.test(k)) localStorage.removeItem(k); }); },
+  };
+
+  // Admin actions the real site sends to /api/admin, answered here with the same rules.
+  // Nothing is emailed: messages are written to the email log marked as demo.
+  const NEXT_OK = { pending_payment: ['paid', 'cancelled'], paid: ['in_production', 'cancelled', 'refunded'], in_production: ['dispatched', 'cancelled', 'refunded'], dispatched: ['delivered', 'refunded'], delivered: ['refunded'] };
+  const bad = m => { throw new Error(m); };
+  function segMatch(rules, c) {
+    const list = (rules && rules.rules) || []; if (!list.length) return true;
+    const days = v => v ? (Date.now() - new Date(v)) / 86400000 : Infinity;
+    const t = r => { const v = r.value;
+      switch (r.field) {
+        case 'category': return r.op === 'excludes' ? !(c.categories || []).includes(v) : (c.categories || []).includes(v);
+        case 'last_order': return r.op === 'never' ? !c.last_order_at : r.op === 'within' ? days(c.last_order_at) <= +v : c.last_order_at ? days(c.last_order_at) > +v : false;
+        case 'total_spent': return r.op === 'lte' ? (c.total_spent_cents || 0) <= v * 100 : (c.total_spent_cents || 0) >= v * 100;
+        case 'orders': return r.op === 'lte' ? (c.paid_orders || 0) <= +v : (c.paid_orders || 0) >= +v;
+        case 'state': return r.op === 'not_in' ? ![].concat(v || []).includes(c.state) : [].concat(v || []).includes(c.state);
+        case 'tag': return r.op === 'lacks' ? !(c.tags || []).includes(v) : (c.tags || []).includes(v);
+        case 'subscribed': return days(c.consent_at) <= +v;
+        default: return false; } };
+    return rules.match === 'any' ? list.some(t) : list.every(t);
+  }
+  const eligible = () => { const st = Object.fromEntries(customerStats().map(s => [s.customer_id, s]));
+    return db.t.customers.filter(c => c.marketing_status === 'subscribed' && c.consent_basis && c.consent_at && !c.suppressed).map(c => ({ ...c, ...(st[c.id] || {}), id: c.id })); };
+  const audienceOf = segId => { const all = eligible(); if (!segId) return all; const s = db.t.segments.find(x => x.id === segId); return s ? all.filter(c => segMatch(s.rules, c)) : all; };
+  const logMail = row => db.t.email_log.push(withDefaults('email_log', { id: crypto.randomUUID(), status: 'logged', provider: 'demo', created_at: now(), ...row }));
+  const who = 'admin:' + USER;
+  function previewHtml(c) {
+    const e = s => String(s == null ? '' : s).replace(/[&<>"]/g, x => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]));
+    const body = (c.blocks || []).map(b => b.type === 'heading' ? `<h1 style="font-size:22px;margin:0 0 14px">${e(b.text).replace(/\{\{\s*first_name\s*\}\}/g, 'Jo')}</h1>`
+      : b.type === 'text' ? String(b.html || '').replace(/<\s*script[\s\S]*?<\/\s*script\s*>/gi, '') : b.type === 'button' ? `<p style="margin:18px 0"><span style="background:#C41E2A;color:#fff;padding:12px 26px;border-radius:999px;font-weight:bold;display:inline-block">${e(b.label)}</span></p>`
+      : b.type === 'image' && b.url ? `<img src="${e(b.url)}" alt="" style="width:100%;border-radius:8px;margin:0 0 16px">` : b.type === 'divider' ? '<hr style="border:0;border-top:1px solid #ebe8e2;margin:20px 0">'
+      : b.type === 'products' ? `<table width="100%"><tr>${(b.items || []).map(i => `<td style="text-align:center;font-size:13px;padding:0 6px">${i.image ? `<img src="${e(i.image)}" style="width:100%;border-radius:6px">` : ''}<b>${e(i.name)}</b><br>${e(i.price || '')}</td>`).join('')}</tr></table>` : b.type === 'cart' ? '<p style="color:#777">[Their checkout items appear here]</p>' : '').join('');
+    return `<body style="margin:0;background:#f4f2ee;font-family:Helvetica,Arial,sans-serif;color:#17161a"><div style="max-width:600px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden">
+      <div style="padding:22px 28px;border-bottom:3px solid #C41E2A"><img src="${location.origin}${location.pathname.replace(/[^/]*$/, '')}assets/logo-trim.png" width="150" alt="Avanti Print &amp; Design"></div>
+      <div style="padding:28px;font-size:15px;line-height:1.6">${body}</div><div style="padding:18px 28px;background:#faf8f5;font-size:12px;color:#6b6870">Avanti Print &amp; Design · (02) 9729 0139 · info@avantiprint.com.au<br>You're receiving this because you subscribed. Unsubscribe · Email preferences</div></div>
+      <p style="text-align:center;font:12px sans-serif;color:#999">Demo preview. The live site uses the same layout from the server.</p></body>`;
+  }
+  window.GYA_DEMO.server = async function (action, b) {
+    load(); const out = (() => { switch (action) {
+      case 'order-transition': {
+        const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
+        if (o.status === b.to) return { changed: false, status: o.status };
+        if (!(NEXT_OK[o.status] || []).includes(b.to)) bad('That status change is not allowed from the order’s current status.');
+        if (b.to === 'dispatched' && !(b.carrier && b.tracking_number)) bad('Enter the carrier and tracking number to mark the order as dispatched.');
+        const from = o.status; o.status = b.to; o[b.to + '_at'] = now();
+        if (b.to === 'dispatched') Object.assign(o, { carrier: b.carrier, tracking_number: b.tracking_number, tracking_url: b.tracking_url || null });
+        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: from, to_status: b.to, actor: who, note: b.note || null, data: b.to === 'dispatched' ? { carrier: b.carrier, tracking_number: b.tracking_number } : null, created_at: now() }));
+        if (b.to !== 'delivered' && !(b.to === 'cancelled' && from === 'pending_payment'))
+          logMail({ kind: 'transactional', template: 'order-' + b.to, to_email: o.email, order_id: o.id, subject: { in_production: `Your order ${o.number} is in production`, dispatched: `Your order ${o.number} is on its way`, cancelled: `Order ${o.number} has been cancelled`, refunded: `Refund for order ${o.number}`, paid: `Order confirmed: ${o.number}` }[b.to] });
+        return { changed: true, from, status: b.to }; }
+      case 'order-note': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
+        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: b.note, created_at: now() })); return { ok: true }; }
+      case 'campaign-test': { const c = b.campaign || db.t.campaigns.find(x => x.id === b.campaign_id) || {};
+        logMail({ kind: 'test', template: 'campaign-test', to_email: 'you (demo)', campaign_id: c.id || null, subject: '[Test] ' + (c.subject || '') }); return { status: 'logged', to: 'your inbox (demo: nothing is actually sent)' }; }
+      case 'campaign-preview': return { html: previewHtml(b.campaign || {}) };
+      case 'audience-count': return { count: audienceOf(b.segment_id).length };
+      case 'segment-preview': { const all = eligible(), rules = b.rules || (db.t.segments.find(s => s.id === b.segment_id) || {}).rules; const hit = rules ? all.filter(c => segMatch(rules, c)) : all;
+        return { count: hit.length, eligible: all.length, sample: hit.slice(0, 8).map(c => c.email) }; }
+      case 'campaign-send': {
+        const c = db.t.campaigns.find(x => x.id === b.campaign_id) || bad('Campaign not found.');
+        if (!['draft', 'scheduled'].includes(c.status)) bad('This campaign has already been sent or is sending.');
+        if (!c.subject || !(c.blocks || []).length) bad('Add a subject and some content before sending.');
+        const people = audienceOf(c.segment_id);
+        people.forEach((p, i) => logMail({ kind: 'campaign', template: 'campaign', to_email: p.email, campaign_id: c.id, customer_id: p.id, subject: c.subject, status: 'delivered', delivered_at: now(), opened_at: i % 2 ? null : now() }));
+        Object.assign(c, { status: 'sent', sent_at: now(), recipients: people.length, updated_at: now() });
+        db.t.audit_log.push(withDefaults('audit_log', { actor: who, action: 'campaign.send', target_type: 'campaign', target_id: c.id, created_at: now() }));
+        return { recipients: people.length }; }
+      case 'campaign-schedule': { const c = db.t.campaigns.find(x => x.id === b.campaign_id) || bad('Campaign not found.');
+        if (new Date(b.at) < Date.now() + 60000) bad('Choose a time at least a minute from now.');
+        Object.assign(c, { status: 'scheduled', scheduled_at: new Date(b.at).toISOString() }); return c; }
+      case 'campaign-unschedule': { const c = db.t.campaigns.find(x => x.id === b.campaign_id) || bad('Campaign not found.'); Object.assign(c, { status: 'draft', scheduled_at: null }); return c; }
+      case 'campaign-duplicate': { const c = db.t.campaigns.find(x => x.id === b.campaign_id) || bad('Campaign not found.');
+        const n = withDefaults('campaigns', { name: c.name + ' (copy)', subject: c.subject, preview_text: c.preview_text, blocks: JSON.parse(JSON.stringify(c.blocks)), segment_id: c.segment_id, series: c.series, duplicated_from: c.id });
+        db.t.campaigns.push(n); return n; }
+      case 'campaign-stats': { const res = {};
+        (b.ids || []).forEach(id => { const l = db.t.email_log.filter(x => x.campaign_id === id && x.kind === 'campaign'), os = db.t.orders.filter(o => o.campaign_id === id && PAIDS.includes(o.status));
+          res[id] = { sent: l.length, delivered: l.filter(x => x.status === 'delivered' || x.opened_at).length, bounced: l.filter(x => x.status === 'bounced').length, opened: l.filter(x => x.opened_at).length,
+            clicked: l.filter(x => x.clicked_at).length, revenue_cents: os.reduce((s, o) => s + o.total_cents, 0), orders: os.length }; });
+        return res; }
+      case 'customers-import': {
+        if (!String(b.source || '').trim()) bad('Say where these people gave consent (e.g. "2025 trade show sign-up sheet").');
+        if (!b.confirm) bad('Confirm that everyone on this list agreed to receive marketing email.');
+        let added = 0, already = 0, skipped = 0, invalid = 0;
+        (b.rows || []).forEach(r => { const email = String(r.email || '').trim().toLowerCase();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { invalid++; return; }
+          let c = db.t.customers.find(x => x.email === email);
+          if (c && c.marketing_status === 'subscribed') { already++; return; } if (c && c.marketing_status === 'unsubscribed') { skipped++; return; }
+          if (!c) { c = withDefaults('customers', { email, name: r.name || null, state: r.state || null, tags: r.tags || [] }); db.t.customers.push(c); }
+          Object.assign(c, { marketing_status: 'subscribed', consent_basis: 'imported_list', consent_at: now(), consent_source: b.source });
+          db.t.consent_log.push(withDefaults('consent_log', { customer_id: c.id, action: 'subscribe', basis: 'imported_list', source: b.source, actor: who, created_at: now() })); added++; });
+        return { added, already, skipped_unsubscribed: skipped, invalid }; }
+      case 'customer-subscribe': { const c = db.t.customers.find(x => x.id === b.customer_id) || bad('Customer not found.');
+        if (c.marketing_status === 'unsubscribed') bad('This person unsubscribed. Only they can subscribe again, using the sign-up form.');
+        Object.assign(c, { marketing_status: 'subscribed', consent_basis: 'admin_added', consent_at: now(), consent_source: b.source });
+        db.t.consent_log.push(withDefaults('consent_log', { customer_id: c.id, action: 'subscribe', basis: 'admin_added', source: b.source, actor: who, created_at: now() })); return c; }
+      case 'customer-unsubscribe': { const c = db.t.customers.find(x => x.id === b.customer_id) || bad('Customer not found.');
+        Object.assign(c, { marketing_status: 'unsubscribed', unsubscribed_at: now() });
+        db.t.consent_log.push(withDefaults('consent_log', { customer_id: c.id, action: 'unsubscribe', source: 'Unsubscribed by staff', actor: who, created_at: now() })); return c; }
+      case 'run-automations': return { campaigns: [], automations: Object.fromEntries(db.t.automation_flows.filter(f => f.enabled).map(f => [f.key, 0])) };
+      default: bad('Not available in the demo.');
+    } })();
+    persist(); return JSON.parse(JSON.stringify(out));
   };
 
   // ---- request router
@@ -832,6 +1028,44 @@ p{margin:0 0 1em}
 .form input,.form textarea{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff}
 .form input:focus,.form textarea:focus{border-color:var(--ink);outline:none}
 .form textarea{min-height:130px;resize:vertical}
+.form select{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff;font:inherit}
+.co-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.9fr);gap:44px;padding-top:36px;padding-bottom:80px;align-items:start}
+.co-form{display:flex;flex-direction:column;gap:14px}
+.co-form h3{font-size:1.05rem;margin:14px 0 0}
+.co-opt{font-weight:400;color:var(--ink-3);font-size:.75rem;margin-left:4px}
+.co-three{display:grid;grid-template-columns:1.4fr .8fr .8fr;gap:14px}
+.co-radios{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+.co-radios legend{font-size:.8rem;font-weight:700;margin-bottom:8px}
+.co-radios label{display:flex;align-items:center;gap:10px;padding:13px 14px;border:1.5px solid var(--line);border-radius:var(--r);cursor:pointer;background:#fff;font-weight:600;font-size:.92rem;margin:0}
+.co-radios label:has(input:checked){border-color:var(--ink)}
+.co-radios label span{flex:1}
+.co-radios input{accent-color:var(--red);width:auto}
+.co-test{font:600 .62rem var(--mono,monospace);letter-spacing:.06em;color:var(--red);border:1px solid var(--red);border-radius:4px;padding:2px 5px}
+.co-check{display:flex;gap:10px;align-items:flex-start;font-weight:400!important;font-size:.9rem!important;cursor:pointer}
+.co-check input{width:auto;margin-top:3px;accent-color:var(--red)}
+.co-muted{color:var(--ink-3)}.co-small{font-size:.8rem;margin:0}
+.co-note{background:var(--kraft-tint,#faf6ef);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;font-size:.9rem;line-height:1.5}
+.co-note.bad{border-color:var(--red);background:#fff5f5}
+.co-warn{color:var(--red);font-size:.78rem;font-weight:600;margin-top:2px}
+.co-summary{background:var(--paper-2,#f4f2ee);border-radius:var(--r-lg,14px);padding:22px;position:sticky;top:96px}
+.co-summary h3{margin:0 0 14px;font-size:1.05rem}
+.co-line{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.co-line .thumb{width:52px;height:52px;border-radius:8px;overflow:hidden;background:#fff}
+.co-line .thumb img,.co-line .thumb .ph{width:100%;height:100%;object-fit:cover}
+.co-line .thumb .ph span{display:none}
+.co-qty{color:var(--ink-3);font-weight:400}.co-price{font-weight:700;white-space:nowrap}
+.co-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:.92rem}
+.co-row>span:last-child{white-space:nowrap}
+.co-total{font-weight:800;font-size:1.05rem;border-top:1px solid var(--line);margin-top:6px;padding-top:12px}
+.ord-wrap{padding-top:8px;padding-bottom:80px;max-width:760px}
+.ord-sum{position:static;margin-top:20px}
+.ord-steps{display:flex;gap:8px;list-style:none;padding:0;margin:0 0 20px;flex-wrap:wrap}
+.ord-steps li{display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;color:var(--ink-3);flex:1;min-width:130px}
+.ord-steps li span{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:.75rem}
+.ord-steps li.on{color:var(--ink)}.ord-steps li.on span{background:var(--red);border-color:var(--red);color:#fff}
+@media (max-width:900px){.co-grid{grid-template-columns:1fr;gap:24px}.co-summary{position:static;order:-1}}
+@media (max-width:520px){.co-three{grid-template-columns:1fr 1fr}.co-three>div:first-child{grid-column:1/-1}}
+
 @media(max-width:520px){.form .two{grid-template-columns:1fr}}
 .prose{max-width:70ch;padding:40px 0 72px;color:var(--ink-2)}
 .prose h2{font-size:1.4rem;margin:28px 0 10px;color:var(--ink)}
@@ -896,6 +1130,8 @@ body.gya-admin-mode .topbar, body.gya-admin-mode .footer { display: none; }
 .gya-demo-note { background: #fff6e0; border: 1px solid #f0d58a; color: #5a4300; border-radius: 8px; padding: 10px 12px; font-size: .82rem; line-height: 1.45; margin: 0 0 14px; }
 .gya-side .gya-demo-note { margin: 0; }
 .gya-demo-note .gya-link { display: block; margin-top: 6px; font-size: .82rem; }
+.gya-nav-h { display: block; font-family: var(--g-mono); font-size: .64rem; letter-spacing: .12em; text-transform: uppercase; color: var(--g-ink3); padding: 14px 12px 4px; }
+.gya-side nav .gya-nav-h:first-child { padding-top: 2px; }
 .gya-side nav a { padding: 9px 12px; border-radius: 8px; font-weight: 600; font-size: .9rem; color: var(--g-ink); text-decoration: none; }
 .gya-side nav a:hover { background: var(--g-paper); }
 .gya-side nav a.on { background: var(--g-ink); color: #fff; }
@@ -942,6 +1178,51 @@ textarea.gya-in { resize: vertical; min-height: 44px; }
 .gya-link { background: none; border: 0; padding: 0; color: var(--g-ink); text-decoration: underline; cursor: pointer; font: inherit; font-size: .82rem; text-align: left; }
 .gya-x { background: none; border: 0; color: var(--g-red); cursor: pointer; font-size: .8rem; font-weight: 600; padding: 4px; }
 .gya-table-wrap { overflow-x: auto; }
+/* orders & marketing module */
+.gya-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 0 0 16px; }
+.gya-statc { background: #fff; border: 1px solid var(--g-line); border-radius: calc(var(--g-r) + 4px); padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
+.gya-statc span { font-family: var(--g-mono); font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--g-ink3); }
+.gya-statc b { font-size: 1.6rem; line-height: 1.15; }
+.gya-statc small { color: var(--g-ink3); font-size: .78rem; }
+.gya-st { display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; vertical-align: middle; }
+.gya-st-ok { color: #1a7f45; background: #effaf3; } .gya-st-info { color: #2456a6; background: #eef4ff; } .gya-st-wait { color: #9a6200; background: #fff8e8; }
+.gya-st-done { color: #3d3a42; background: #f1efec; } .gya-st-off { color: #77737c; background: #f6f5f3; } .gya-st-bad { color: #b3261e; background: #fff1f0; }
+h1 .gya-st { font-size: .8rem; margin-left: 8px; }
+.gya-cardhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; }
+.gya-cardhead h3 { margin: 0; }
+.gya-pad0 { padding: 6px 8px; }
+.gya-click { cursor: pointer; } .gya-click:hover td { background: var(--g-paper); }
+.gya-inline { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--g-ink3); }
+.gya-inline .gya-in { width: auto; }
+.gya-opts { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: .8rem; color: var(--g-ink3); margin-top: 3px; }
+.gya-opts em { font-style: normal; color: var(--g-ink); }
+.gya-art { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: .82rem; }
+.gya-warn-t { color: #b3261e; font-weight: 600; }
+.gya-small { font-size: .78rem; }
+.gya-nowrap { white-space: nowrap; }
+.gya-timeline { list-style: none; margin: 0; padding: 0 0 0 16px; border-left: 2px solid var(--g-line); display: flex; flex-direction: column; gap: 12px; }
+.gya-timeline li { position: relative; font-size: .88rem; }
+.gya-timeline li::before { content: ""; position: absolute; left: -22px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--g-accent, #C41E2A); }
+.gya-timeline b { display: block; } .gya-timeline p { margin: 4px 0 0; }
+.gya-dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: .88rem; margin: 0 0 10px; }
+.gya-dl dt { color: var(--g-ink3); } .gya-dl dd { margin: 0; word-break: break-word; }
+.gya-mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: .86rem; }
+.gya-tag { display: inline-block; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--g-paper); border: 1px solid var(--g-line); margin: 3px 4px 0 0; }
+.gya-h4 { font-size: .85rem; margin: 16px 0 8px; }
+.gya-note { background: var(--g-paper); border: 1px solid var(--g-line); border-radius: var(--g-r); padding: 12px 14px; font-size: .9rem; }
+.gya-sticky { position: sticky; top: 16px; }
+.gya-preview { width: 100%; height: 640px; border: 1px solid var(--g-line); border-radius: var(--g-r); background: #f4f2ee; }
+.gya-blocks { display: flex; flex-direction: column; gap: 10px; margin: 0 0 10px; }
+.gya-block { border: 1px solid var(--g-line); border-radius: var(--g-r); padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.gya-block-h { display: flex; align-items: center; gap: 8px; font-size: .82rem; }
+.gya-block-h b { flex: 1; }
+.gya-addblocks { flex-wrap: wrap; }
+.gya-rule { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
+.gya-rule > select { width: auto; }
+.gya-flow .gya-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.gya-camps td { font-size: .85rem; }
+@media (max-width: 900px) { .gya-nav-h { display: none; } .gya-preview { height: 460px; } .gya-sticky { position: static; } }
+
 .gya-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .gya-table th { text-align: left; font-family: var(--g-mono); font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--g-ink3); padding: 8px 10px; border-bottom: 1px solid var(--g-line); }
 .gya-table td { padding: 9px 10px; border-bottom: 1px solid var(--g-line); vertical-align: top; }
@@ -1972,7 +2253,7 @@ const GYA = (() => {
     const current = sections.find(s => s.id === seg[1]) || sections[0];
     root.innerHTML = `<aside class="gya-side">
         <div class="gya-brand"><b>${esc(cfg.brand)}</b><span>Dashboard</span></div>
-        <nav>${sections.map(s => `<a href="#/admin/${s.id}" class="${s === current ? 'on' : ''}">${s.label}</a>`).join('')}</nav>
+        <nav>${navHtml(current)}</nav>
         <div class="gya-me"><span>${esc(state.profile.display_name || state.session.user.email)}</span>
           <a href="#/" class="gya-link">View site</a><button type="button" class="gya-link" id="gyaSignOut">Sign out</button></div>
         ${window.GYA_DEMO ? '<div class="gya-demo-note"><b>Demo mode.</b> Changes are saved in this browser only and nothing goes live. <button type="button" class="gya-link" id="gyaDemoReset">Reset demo</button></div>' : ''}
@@ -1983,6 +2264,34 @@ const GYA = (() => {
     try { await current.render(main, seg.slice(2), api); wireRte(main); wireImgPick(main); }
     catch (e) { main.innerHTML = `<div class="gya-card"><h3>Couldn't load this section</h3><p class="gya-err">${esc(e.message)}</p><button class="gya-btn gya-btn-line" onclick="location.reload()">Try again</button></div>`;
       if (/sign in again/i.test(e.message)) { clearSession(); location.hash = '#/login?next=' + encodeURIComponent(location.hash); } }
+  }
+  // sidebar grouped like an operator portal; sections can set their own group
+  const NAV_GROUPS = { overview: 'Overview', orders: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
+    customers: 'Customers', campaigns: 'Marketing', segments: 'Marketing', automations: 'Marketing', emaillog: 'Marketing',
+    blog: 'Content', pages: 'Content', content: 'Content', seo: 'Content', media: 'Content', settings: 'Account' };
+  function navHtml(current) {
+    let last = '';
+    return sections.map(s => { const g = s.group || NAV_GROUPS[s.id] || ''; const h = g && g !== last ? `<span class="gya-nav-h">${esc(g)}</span>` : ''; last = g || last;
+      return h + `<a href="#/admin/${s.id}" class="${s === current ? 'on' : ''}">${s.label}</a>`; }).join('');
+  }
+  // Admin actions that change orders, send email or touch consent go to the server (/api/admin)
+  async function server(action, body = {}) {
+    if (window.GYA_DEMO && GYA_DEMO.server) return GYA_DEMO.server(action, body);
+    const t = await token(); if (!t) throw new Error('Your session has expired. Please sign in again.');
+    let r; try { r = await fetch(`${cfg.apiBase || '/api'}/admin?action=${encodeURIComponent(action)}`, { method: 'POST',
+      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+    catch (e) { throw new Error('Could not reach the shop server. Check your connection and try again.'); }
+    let d = {}; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(d.error || (r.status === 404 ? 'The shop server is not set up on this site yet.' : `Request failed (${r.status})`));
+    return d;
+  }
+  async function download(bucket, path) {   // private files (customer artwork) via the signed-in session
+    if (window.GYA_DEMO) throw new Error('Customer artwork files are only available on the live dashboard.');
+    const t = await token(); if (!t) throw new Error('Your session has expired. Please sign in again.');
+    const r = await fetch(`${cfg.supabaseUrl}/storage/v1/object/authenticated/${bucket}/${path.split('/').map(encodeURIComponent).join('/')}`, { headers: { apikey: cfg.anonKey, Authorization: `Bearer ${t}` } });
+    if (!r.ok) throw new Error('That file could not be found.');
+    const url = URL.createObjectURL(await r.blob()), a = document.createElement('a');
+    a.href = url; a.download = path.split('/').pop(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
   const head = (title, sub = '', actions = '') => `<header class="gya-head"><div><h1>${title}</h1>${sub ? `<p class="gya-muted">${sub}</p>` : ''}</div>
     <div class="gya-actions"><span id="gyaSaveState" class="gya-savestate"></span>${actions}</div></header>`;
@@ -2184,7 +2493,7 @@ const GYA = (() => {
   } });
 
   /* ---------- public API ---------- */
-  const api = { cfg, state, enabled, esc, qs, qsa, slugify, toast, rest, rpc, upsert, del, upload, publicUrl, load, invalidate, busy, ui, head,
+  const api = { cfg, state, enabled, esc, qs, qsa, slugify, toast, rest, rpc, upsert, del, upload, publicUrl, load, invalidate, busy, ui, head, server, download,
     sortable, wireRte, rteValue, wireImgPick, markDirty, markClean, sanitize, refreshPublic, seoFields, wireSeoCounters, saveSeo };
   Object.assign(api, {
     use(a) { adapter = a; (a.sections || []).forEach(section); sections.sort((x, y) => (x.order || 0) - (y.order || 0)); },
@@ -2497,6 +2806,439 @@ const GYA = (() => {
   } });
 })(GYA);
 
+/* ==== GYA CMS v1 : orders & marketing module ==================================
+   Overview, Orders, Customers, Email campaigns, Segments, Automations, Email log.
+   Reads come straight from the database (admins only, via row-level security).
+   Anything that changes an order, sends email or touches consent goes through
+   G.server() -> /api/admin, which validates it and records who did it.
+   ============================================================================ */
+(function (G) {
+  'use strict';
+  const { esc, qs, qsa, ui, head, toast, rest, rpc, busy, server } = G;
+  const enc = encodeURIComponent;
+  const $c = c => '$' + ((c || 0) / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dt = s => s ? new Date(s).toLocaleDateString('en-AU') : '';
+  const dtt = s => s ? new Date(s).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '–';
+  const ST = { pending_payment: ['Awaiting payment', 'wait'], paid: ['Paid', 'ok'], in_production: ['In production', 'info'], dispatched: ['Dispatched', 'info'],
+    delivered: ['Delivered', 'done'], cancelled: ['Cancelled', 'off'], refunded: ['Refunded', 'off'],
+    draft: ['Draft', 'off'], scheduled: ['Scheduled', 'info'], sending: ['Sending', 'wait'], sent: ['Sent', 'ok'], failed: ['Failed', 'bad'],
+    subscribed: ['Subscribed', 'ok'], unsubscribed: ['Unsubscribed', 'off'], not_subscribed: ['Not subscribed', 'off'], suppressed: ['Suppressed', 'bad'],
+    queued: ['Queued', 'wait'], delivered_mail: ['Delivered', 'ok'], delivery_delayed: ['Delayed', 'wait'], bounced: ['Bounced', 'bad'], complained: ['Complaint', 'bad'], logged: ['Logged only', 'off'] };
+  const pill = (s, label) => { const v = ST[s] || [s, 'off']; return `<span class="gya-st gya-st-${v[1]}">${esc(label || v[0])}</span>`; };
+  const BASIS = { checkout_opt_in: 'Ticked the box at checkout', footer_signup: 'Signed up on the website', imported_list: 'Imported list', admin_added: 'Added by staff' };
+  const CARRIERS = ['Australia Post', 'StarTrack', 'Sendle', 'Aramex', 'Couriers Please', 'TNT', 'Own delivery', 'Other'];
+  const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
+  const PAGE = 50;
+  const empty = (msg) => `<p class="gya-muted" style="padding:18px 4px">${msg}</p>`;
+  const card = (label, value, sub = '') => `<div class="gya-statc"><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const orderRow = o => `<tr class="gya-click" data-href="#/admin/orders/${o.id}"><td><a href="#/admin/orders/${o.id}">${esc(o.number)}</a></td><td>${esc(o.email)}</td><td>${pill(o.status)}</td><td>${$c(o.total_cents)}</td><td>${dt(o.created_at)}</td></tr>`;
+  const clickRows = root => qsa('tr[data-href]', root).forEach(tr => tr.onclick = e => { if (!e.target.closest('a,button,input')) location.hash = tr.dataset.href; });
+
+  /* ---------------- Overview ---------------- */
+  async function stats() {
+    try { const r = await rpc('admin_order_stats', {}); if (r) return r; } catch (e) {}
+    const [o, c, p] = await Promise.all([rest('orders?select=status,total_cents'), rest('customers?select=marketing_status,suppressed'), rest('products?select=published')]);
+    const paid = ['paid', 'in_production', 'dispatched', 'delivered'];
+    return { revenue_paid_cents: o.filter(x => paid.includes(x.status)).reduce((s, x) => s + x.total_cents, 0), orders: o.filter(x => x.status !== 'pending_payment').length,
+      open_orders: o.filter(x => ['paid', 'in_production'].includes(x.status)).length, awaiting_payment: o.filter(x => x.status === 'pending_payment').length,
+      customers: c.length, subscribers: c.filter(x => x.marketing_status === 'subscribed' && !x.suppressed).length, active_products: p.filter(x => x.published).length };
+  }
+  G.section({ id: 'overview', label: 'Dashboard', order: 1, async render(main) {
+    const [s, recent] = await Promise.all([stats(), rest('orders?select=id,number,email,status,total_cents,created_at&status=neq.pending_payment&order=created_at.desc&limit=8')]);
+    main.innerHTML = head('Dashboard', 'The whole operation at a glance.') + `
+      <div class="gya-stats">${card('Revenue (paid)', $c(s.revenue_paid_cents))}${card('Orders', s.orders)}${card('Customers', s.customers)}${card('Active products', s.active_products)}
+        ${card('Open orders', s.open_orders, 'paid, not yet dispatched')}${card('Subscribers', s.subscribers, 'can receive marketing email')}${card('Awaiting payment', s.awaiting_payment, 'checkouts not yet paid')}</div>
+      <section class="gya-card"><div class="gya-cardhead"><h3>Recent orders</h3><a href="#/admin/orders" class="gya-link">All orders →</a></div>
+      ${recent.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${recent.map(orderRow).join('')}</tbody></table></div>` : empty('No orders yet. They will appear here as soon as the first customer pays.')}</section>`;
+    clickRows(main);
+  } });
+
+  /* ---------------- Orders ---------------- */
+  const of = { status: 'placed', from: '', to: '', q: '' };
+  async function orderList(main) {
+    main.innerHTML = head('Orders', 'Every order, newest first. Click an order to update it.') + `
+      <div class="gya-filters gya-ofilters">
+        <select class="gya-in" id="ofStatus"><option value="placed">All placed orders</option>${['paid', 'in_production', 'dispatched', 'delivered', 'cancelled', 'refunded'].map(s => `<option value="${s}">${ST[s][0]}</option>`).join('')}<option value="pending_payment">Awaiting payment (unfinished checkouts)</option><option value="all">Everything</option></select>
+        <label class="gya-inline">From <input class="gya-in" type="date" id="ofFrom"></label><label class="gya-inline">To <input class="gya-in" type="date" id="ofTo"></label>
+        <input class="gya-in gya-search" id="ofQ" placeholder="Search order number or email"></div>
+      <section class="gya-card gya-pad0"><div id="ofList"></div></section>`;
+    qs('#ofStatus', main).value = of.status; qs('#ofFrom', main).value = of.from; qs('#ofTo', main).value = of.to; qs('#ofQ', main).value = of.q;
+    let offset = 0, rows = [];
+    const draw = async (more) => {
+      if (!more) { offset = 0; rows = []; }
+      let q = `select=id,number,email,status,total_cents,created_at&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
+      if (of.status === 'placed') q += '&status=neq.pending_payment'; else if (of.status !== 'all') q += `&status=eq.${of.status}`;
+      if (of.from) q += `&created_at=gte.${enc(new Date(of.from + 'T00:00:00').toISOString())}`;
+      if (of.to) { const t = new Date(of.to + 'T00:00:00'); t.setDate(t.getDate() + 1); q += `&created_at=lt.${enc(t.toISOString())}`; }
+      const term = of.q.replace(/[(),*%]/g, ' ').trim();
+      if (term) q += `&or=(number.ilike.*${enc(term)}*,email.ilike.*${enc(term)}*)`;
+      const got = await rest(`orders?${q}`); const hasMore = got.length > PAGE; rows = rows.concat(got.slice(0, PAGE)); offset += PAGE;
+      qs('#ofList', main).innerHTML = rows.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${rows.map(orderRow).join('')}</tbody></table></div>
+        ${hasMore ? '<p style="text-align:center;padding:12px"><button class="gya-btn gya-btn-line" id="ofMore">Load more</button></p>' : ''}` : empty('No orders match these filters.');
+      clickRows(main); const m = qs('#ofMore', main); if (m) m.onclick = () => draw(true);
+    };
+    let t; const change = () => { of.status = qs('#ofStatus', main).value; of.from = qs('#ofFrom', main).value; of.to = qs('#ofTo', main).value; of.q = qs('#ofQ', main).value; clearTimeout(t); t = setTimeout(() => draw(), 250); };
+    qsa('.gya-ofilters .gya-in', main).forEach(el => { el.oninput = change; el.onchange = change; });
+    await draw();
+  }
+
+  const NEXT = { pending_payment: [['cancelled', 'Cancel checkout', 'line']], paid: [['in_production', 'Start production', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
+    in_production: [['dispatched', 'Mark as dispatched', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
+    dispatched: [['delivered', 'Mark delivered', 'red'], ['refunded', 'Mark refunded', 'line']], delivered: [['refunded', 'Mark refunded', 'line']] };
+  async function orderDetail(main, id) {
+    const [o] = await rest(`orders?select=*&id=eq.${enc(id)}`);
+    if (!o) { main.innerHTML = head('Order not found') + '<p><a class="gya-link" href="#/admin/orders">Back to orders</a></p>'; return; }
+    const [items, events, mails] = await Promise.all([rest(`order_items?select=*&order_id=eq.${enc(id)}&order=position`), rest(`order_events?select=*&order_id=eq.${enc(id)}&order=created_at`),
+      rest(`email_log?select=template,status,created_at,bounce_reason&order_id=eq.${enc(id)}&order=created_at`)]);
+    const a = o.shipping_address || {}, acts = NEXT[o.status] || [];
+    const who = e => e.startsWith('admin:') ? esc(e.slice(6)) : e === 'customer' ? 'Customer' : e.startsWith('webhook:') ? `${esc(e.slice(8)[0].toUpperCase() + e.slice(9))} (automatic)` : e === 'paypal:capture' ? 'PayPal (automatic)' : e === 'system' ? 'System' : esc(e);
+    const refLink = o.provider === 'stripe' && o.provider_ref ? `https://dashboard.stripe.com/search?query=${enc(o.provider_ref)}` : o.provider === 'paypal' && o.provider_ref ? `https://www.paypal.com/activity/payment/${enc(o.provider_ref)}` : '';
+    main.innerHTML = head(`${esc(o.number)} ${pill(o.status)}`, `Placed ${dtt(o.created_at)} · <a class="gya-link" href="#/admin/orders">Back to orders</a>`,
+      acts.map(([to, label, kind]) => `<button class="gya-btn ${kind === 'red' ? 'gya-btn-red' : 'gya-btn-line'}" data-to="${to}">${label}</button>`).join('')) + `
+      <div id="odForm"></div>
+      <div class="gya-grid2">
+        <div>
+          <section class="gya-card"><h3>Items</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Product</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead><tbody>
+            ${items.map(i => `<tr><td><b>${esc(i.name)}</b>${Object.keys(i.options || {}).length ? `<div class="gya-opts">${Object.entries(i.options).map(([k, v]) => `<span><em>${esc(k)}:</em> ${esc(v)}</span>`).join('')}</div>` : ''}
+              ${i.artwork ? `<div class="gya-art">${i.artwork.design ? `<span>Design: ${esc(i.artwork.design)}</span>` : ''}${i.artwork.later ? '<span class="gya-warn-t">Customer is supplying artwork later</span>' : ''}
+                ${(i.artwork.files || []).map(f => `<span>${esc(f.side)}: ${esc(f.name)} ${f.path ? `<button class="gya-btn gya-btn-line gya-btn-sm" data-dl="${esc(f.path)}">Download</button>` : '<em class="gya-warn-t">not uploaded</em>'}${f.info ? `<small class="gya-muted"> ${esc(f.info)}</small>` : ''}</span>`).join('')}</div>` : ''}</td>
+              <td>${i.qty}</td><td>${$c(i.unit_cents)}</td><td>${$c(i.line_cents)}</td></tr>`).join('')}
+            <tr><td colspan="3">Delivery${o.delivery_method ? `<div class="gya-muted">${esc(o.delivery_method)}</div>` : ''}${o.delivery_quote_required ? '<div class="gya-warn-t">Some items need a courier quote</div>' : ''}</td><td>${$c(o.delivery_cents)}</td></tr>
+            <tr><td colspan="3"><b>Total (AUD)</b><div class="gya-muted">Includes GST of ${$c(o.gst_cents)}</div></td><td><b>${$c(o.total_cents)}</b></td></tr></tbody></table></div></section>
+          <section class="gya-card"><h3>Timeline</h3><ol class="gya-timeline">${events.map(e => `<li><b>${e.from_status && e.from_status !== e.to_status ? `${ST[e.from_status] ? ST[e.from_status][0] : e.from_status} → ${ST[e.to_status] ? ST[e.to_status][0] : e.to_status}` : e.from_status === e.to_status ? 'Note' : ST[e.to_status] ? ST[e.to_status][0] : e.to_status}</b>
+              <span class="gya-muted">${dtt(e.created_at)} · ${who(e.actor)}</span>${e.note ? `<p>${esc(e.note)}</p>` : ''}${e.data && e.data.tracking_number ? `<p>${esc(e.data.carrier)} · ${esc(e.data.tracking_number)}</p>` : ''}</li>`).join('')}</ol>
+            <div class="gya-row" style="margin-top:10px"><input class="gya-in" id="odNote" placeholder="Add an internal note (not sent to the customer)"><button class="gya-btn gya-btn-line" id="odNoteBtn">Add note</button></div></section>
+        </div>
+        <div>
+          <section class="gya-card"><h3>Customer</h3><p><b>${esc(o.name || '')}</b>${o.company ? `<br>${esc(o.company)}` : ''}<br><a class="gya-link" href="mailto:${esc(o.email)}">${esc(o.email)}</a>${o.phone ? `<br><a class="gya-link" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>` : ''}</p>
+            <p><b>Delivery address</b><br>${esc(a.line1 || '')}${a.line2 ? `<br>${esc(a.line2)}` : ''}<br>${esc([a.suburb, a.state, a.postcode].filter(Boolean).join(' '))}</p>
+            ${o.customer_note ? `<p><b>Customer note</b><br>${esc(o.customer_note)}</p>` : ''}<p class="gya-muted">${o.marketing_opt_in ? 'Opted in to marketing emails at checkout.' : 'Did not opt in to marketing emails.'}</p>
+            ${o.customer_id ? `<a class="gya-link" href="#/admin/customers/${o.customer_id}">Customer record →</a>` : ''}</section>
+          <section class="gya-card"><h3>Payment</h3><dl class="gya-dl"><dt>Provider</dt><dd>${esc({ stripe: 'Stripe', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '')}</dd>
+            <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
+            <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.tracking_number ? `<dt>Tracking</dt><dd>${esc(o.carrier)} · ${esc(o.tracking_number)}</dd>` : ''}</dl>
+            ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
+          <section class="gya-card"><h3>Emails to the customer</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(String(m.template || '').replace('order-', '').replace('_', ' '))} ${pill(m.status === 'delivered' ? 'delivered_mail' : m.status)} <span class="gya-muted">${dtt(m.created_at)}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}</section>
+        </div></div>`;
+    const doMove = async (btn, to, extra = {}) => busy(btn, async () => { await server('order-transition', { order_id: o.id, to, ...extra }); toast(`Order ${o.number}: ${ST[to][0]}`); orderDetail(main, id); });
+    qsa('[data-to]', main).forEach(b => b.onclick = () => {
+      const to = b.dataset.to, form = qs('#odForm', main);
+      if (to === 'dispatched') {
+        form.innerHTML = ui.card('Mark as dispatched', `<div class="gya-grid2">${ui.field('Carrier', ui.select('carrier', CARRIERS, 'Australia Post'))}${ui.field('Tracking number', ui.text('tracking', '', 'autocomplete="off"'))}</div>
+          ${ui.field('Tracking link', ui.text('turl', '', 'placeholder="https://..."'), 'Only needed for “Other” or your own delivery. For the listed carriers the link is filled in automatically.')}${ui.field('Note (optional)', ui.text('note'))}
+          <div class="gya-row"><button class="gya-btn gya-btn-red" id="odDispatch">Mark dispatched and email the customer</button><button class="gya-btn gya-btn-line" id="odCancel">Cancel</button></div>`);
+        qs('#odCancel', form).onclick = () => { form.innerHTML = ''; };
+        qs('#odDispatch', form).onclick = e => { const v = n => qs(`[name=${n}]`, form).value.trim();
+          if (!v('tracking')) { toast('Enter the tracking number', true); return; }
+          doMove(e.target, 'dispatched', { carrier: v('carrier'), tracking_number: v('tracking'), tracking_url: v('turl'), note: v('note') }); };
+        qs('[name=tracking]', form).focus(); return;
+      }
+      const msg = { cancelled: o.status === 'pending_payment' ? 'Cancel this unfinished checkout? The customer is not emailed.' : 'Cancel this order and email the customer? Remember to refund them in Stripe or PayPal.',
+        refunded: 'Mark this order as refunded and email the customer? Make sure the refund has been issued in Stripe or PayPal.' }[to];
+      if (msg && !confirm(msg)) return;
+      doMove(b, to, { note: to === 'cancelled' || to === 'refunded' ? (prompt('Reason (optional, for the timeline):') || '') : '' });
+    });
+    qs('#odNoteBtn', main).onclick = e => { const n = qs('#odNote', main).value.trim(); if (!n) return; busy(e.target, async () => { await server('order-note', { order_id: o.id, note: n }); orderDetail(main, id); }); };
+    qsa('[data-dl]', main).forEach(b => b.onclick = () => G.download('artwork', b.dataset.dl).catch(e => toast(e.message, true)));
+  }
+  G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
+
+  /* ---------------- Customers ---------------- */
+  const cf = { status: '', q: '' };
+  function parseCsv(text) {
+    const rows = []; let row = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) { const ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; }
+      else if (ch === '"') q = true; else if (ch === ',') { row.push(cell); cell = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; } else cell += ch; }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    const clean = rows.filter(r => r.some(c => c.trim()));
+    const hdr = clean[0] && clean[0].map(h => h.trim().toLowerCase());
+    const col = n => hdr ? hdr.indexOf(n) : -1, hasHdr = hdr && hdr.includes('email');
+    return (hasHdr ? clean.slice(1) : clean).map(r => ({ email: (r[hasHdr ? col('email') : 0] || '').trim(), name: (hasHdr && col('name') >= 0 ? r[col('name')] : r[1] || '').trim(),
+      state: (hasHdr && col('state') >= 0 ? r[col('state')] : '').trim().toUpperCase() || null, tags: (hasHdr && col('tags') >= 0 ? r[col('tags')] : '').split(/[;|]/).map(t => t.trim()).filter(Boolean) }));
+  }
+  async function customerList(main) {
+    main.innerHTML = head('Customers', 'Everyone who has ordered or subscribed, with their marketing consent.', '<button class="gya-btn gya-btn-line" id="cuImportBtn">Import a list</button>') + `
+      <div id="cuImport"></div>
+      <div class="gya-filters"><select class="gya-in" id="cfStatus"><option value="">Everyone</option><option value="subscribed">Subscribed</option><option value="not_subscribed">Not subscribed</option><option value="unsubscribed">Unsubscribed</option><option value="suppressed">Suppressed (bounced or complained)</option></select>
+        <input class="gya-in gya-search" id="cfQ" placeholder="Search email or name"></div>
+      <section class="gya-card gya-pad0"><div id="cuList"></div></section>`;
+    qs('#cfStatus', main).value = cf.status; qs('#cfQ', main).value = cf.q;
+    let offset = 0, rows = [], stats = {};
+    const draw = async (more) => {
+      if (!more) { offset = 0; rows = []; stats = {}; }
+      let q = `select=id,email,name,state,marketing_status,consent_basis,consent_at,suppressed,tags,created_at&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
+      if (cf.status === 'suppressed') q += '&suppressed=is.true'; else if (cf.status) q += `&marketing_status=eq.${cf.status}`;
+      const term = cf.q.replace(/[(),*%]/g, ' ').trim(); if (term) q += `&or=(email.ilike.*${enc(term)}*,name.ilike.*${enc(term)}*)`;
+      const got = await rest(`customers?${q}`), page = got.slice(0, PAGE); rows = rows.concat(page); offset += PAGE;
+      if (page.length) (await rest(`customer_stats?select=*&customer_id=in.(${page.map(c => c.id).join(',')})`)).forEach(s => { stats[s.customer_id] = s; });
+      qs('#cuList', main).innerHTML = rows.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Customer</th><th>State</th><th>Marketing</th><th>Orders</th><th>Spent</th><th>Last order</th></tr></thead><tbody>
+        ${rows.map(c => { const s = stats[c.id] || {}; return `<tr class="gya-click" data-href="#/admin/customers/${c.id}"><td><a href="#/admin/customers/${c.id}">${esc(c.email)}</a>${c.name ? `<div class="gya-muted">${esc(c.name)}</div>` : ''}${(c.tags || []).map(t => `<span class="gya-tag">${esc(t)}</span>`).join('')}</td>
+          <td>${esc(c.state || '')}</td><td>${c.suppressed ? pill('suppressed') : pill(c.marketing_status)}${c.marketing_status === 'subscribed' ? `<div class="gya-muted gya-small">${esc(BASIS[c.consent_basis] || '')}</div>` : ''}</td>
+          <td>${s.paid_orders || 0}</td><td>${$c(s.total_spent_cents)}</td><td>${dt(s.last_order_at) || '–'}</td></tr>`; }).join('')}</tbody></table></div>
+        ${got.length > PAGE ? '<p style="text-align:center;padding:12px"><button class="gya-btn gya-btn-line" id="cuMore">Load more</button></p>' : ''}` : empty('No customers match.');
+      clickRows(main); const m = qs('#cuMore', main); if (m) m.onclick = () => draw(true);
+    };
+    let t; const change = () => { cf.status = qs('#cfStatus', main).value; cf.q = qs('#cfQ', main).value; clearTimeout(t); t = setTimeout(() => draw(), 250); };
+    qs('#cfStatus', main).onchange = change; qs('#cfQ', main).oninput = change;
+    qs('#cuImportBtn', main).onclick = () => {
+      const box = qs('#cuImport', main);
+      box.innerHTML = ui.card('Import subscribers', `<p class="gya-muted">Paste a CSV with an <b>email</b> column (optional: name, state, tags separated by ;), or choose a file. Only import people who agreed to receive marketing email from Avanti. Anyone who has unsubscribed is skipped automatically.</p>
+        <input type="file" accept=".csv,text/csv" id="cuFile" class="gya-in" style="margin-bottom:8px">${ui.area('csv', '', 6, 'placeholder="email,name,state,tags&#10;jo@example.com,Jo Citizen,NSW,wholesale"')}
+        ${ui.field('Where did these people give consent?', ui.text('source', '', 'placeholder="e.g. Sign-up sheet at the 2025 Sydney Print Expo"'), 'This is kept with each person as their consent record.')}
+        ${ui.check('confirm', false, 'Everyone on this list agreed to receive marketing email from Avanti Print &amp; Design.')}
+        <p id="cuPreview" class="gya-muted"></p><div class="gya-row"><button class="gya-btn gya-btn-red" id="cuGo">Import</button><button class="gya-btn gya-btn-line" id="cuX">Cancel</button></div>`);
+      const area = qs('[name=csv]', box), prev = () => { const r = parseCsv(area.value); qs('#cuPreview', box).textContent = r.length ? `${r.length} row${r.length === 1 ? '' : 's'} found.` : ''; };
+      area.oninput = prev; qs('#cuX', box).onclick = () => { box.innerHTML = ''; };
+      qs('#cuFile', box).onchange = async e => { const f = e.target.files[0]; if (f) { area.value = await f.text(); prev(); } };
+      qs('#cuGo', box).onclick = e => busy(e.target, async () => {
+        const r = await server('customers-import', { rows: parseCsv(area.value), source: qs('[name=source]', box).value, confirm: qs('[name=confirm]', box).checked });
+        box.innerHTML = ui.card('Import finished', `<p>${r.added} added, ${r.already} already subscribed, ${r.skipped_unsubscribed} skipped because they had unsubscribed, ${r.invalid} invalid.</p>`); draw();
+      });
+    };
+    await draw();
+  }
+  async function customerDetail(main, id) {
+    const [c] = await rest(`customers?select=*&id=eq.${enc(id)}`);
+    if (!c) { main.innerHTML = head('Customer not found') + '<a class="gya-link" href="#/admin/customers">Back</a>'; return; }
+    const [st, hist, orders, mails] = await Promise.all([rest(`customer_stats?select=*&customer_id=eq.${enc(id)}`), rest(`consent_log?select=*&customer_id=eq.${enc(id)}&order=created_at.desc`),
+      rest(`orders?select=id,number,email,status,total_cents,created_at&email=eq.${enc(c.email)}&order=created_at.desc&limit=20`),
+      rest(`email_log?select=kind,template,subject,status,created_at,opened_at,clicked_at&to_email=eq.${enc(c.email)}&order=created_at.desc&limit=20`)]);
+    const s = st[0] || {}, can = c.marketing_status === 'subscribed' && !c.suppressed;
+    main.innerHTML = head(esc(c.name || c.email), `${esc(c.email)} · <a class="gya-link" href="#/admin/customers">Back to customers</a>`) + `
+      <div class="gya-stats">${card('Orders', s.paid_orders || 0)}${card('Total spent', $c(s.total_spent_cents))}${card('Last order', dt(s.last_order_at) || '–')}</div>
+      <div class="gya-grid2"><div>
+        <section class="gya-card"><h3>Details</h3>${ui.field('Name', ui.text('name', c.name || ''))}${ui.field('Phone', ui.text('phone', c.phone || ''))}
+          <div class="gya-grid2">${ui.field('State', ui.select('state', [['', '–'], ...STATES], c.state || ''))}${ui.field('Tags', ui.text('tags', (c.tags || []).join(', ')), 'Comma separated, e.g. wholesale, events')}</div>
+          <button class="gya-btn gya-btn-red" id="cuSave">Save details</button></section>
+        <section class="gya-card"><h3>Orders</h3>${orders.length ? `<table class="gya-table"><tbody>${orders.map(orderRow).join('')}</tbody></table>` : empty('No orders.')}</section></div>
+      <div><section class="gya-card"><h3>Marketing consent</h3><p>${c.suppressed ? pill('suppressed') : pill(c.marketing_status)}</p>
+          ${c.consent_basis ? `<dl class="gya-dl"><dt>How</dt><dd>${esc(BASIS[c.consent_basis] || c.consent_basis)}</dd><dt>When</dt><dd>${dtt(c.consent_at)}</dd>${c.consent_source ? `<dt>Source</dt><dd>${esc(c.consent_source)}</dd>` : ''}${c.consent_ip ? `<dt>IP address</dt><dd>${esc(c.consent_ip)}</dd>` : ''}</dl>` : ''}
+          ${c.suppressed ? `<p class="gya-warn-t">${esc(c.suppressed_reason || 'Suppressed')}. Marketing email is blocked for this address.</p>` : ''}
+          ${can ? '<button class="gya-btn gya-btn-line" id="cuUnsub">Unsubscribe</button>' : c.marketing_status !== 'unsubscribed' && !c.suppressed ? '<button class="gya-btn gya-btn-line" id="cuSub">Record consent and subscribe</button>' : c.marketing_status === 'unsubscribed' ? '<p class="gya-muted gya-small">This person unsubscribed. Only they can subscribe again, using the sign-up form or a link in an email.</p>' : ''}
+          ${hist.length ? `<h4 class="gya-h4">History</h4><ul class="gya-mini">${hist.map(h => `<li><b>${esc(h.action)}</b> ${dtt(h.created_at)}<br><small class="gya-muted">${esc([BASIS[h.basis], h.source, h.actor !== 'customer' ? h.actor.replace('admin:', 'by ') : ''].filter(Boolean).join(' · '))}</small></li>`).join('')}</ul>` : ''}</section>
+        <section class="gya-card"><h3>Recent emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(m.subject || m.template)} ${pill(m.status === 'delivered' ? 'delivered_mail' : m.status)}<br><small class="gya-muted">${dtt(m.created_at)}${m.opened_at ? ' · opened' : ''}${m.clicked_at ? ' · clicked' : ''}</small></li>`).join('')}</ul>` : empty('None yet.')}</section></div></div>`;
+    qs('#cuSave', main).onclick = e => busy(e.target, async () => { const v = n => qs(`[name=${n}]`, main).value.trim();
+      await rest(`customers?id=eq.${enc(id)}`, { method: 'PATCH', body: { name: v('name') || null, phone: v('phone') || null, state: v('state') || null, tags: v('tags').split(',').map(t => t.trim()).filter(Boolean), updated_at: new Date().toISOString() } });
+      toast('Saved'); });
+    const u = qs('#cuUnsub', main); if (u) u.onclick = e => { if (confirm(`Unsubscribe ${c.email} from marketing email?`)) busy(e.target, async () => { await server('customer-unsubscribe', { customer_id: id }); customerDetail(main, id); }); };
+    const sb = qs('#cuSub', main); if (sb) sb.onclick = e => { const src = prompt('How did this person agree to receive marketing email? (e.g. "Asked by phone, 12 Oct 2026")'); if (src) busy(e.target, async () => { await server('customer-subscribe', { customer_id: id, source: src }); customerDetail(main, id); }); };
+  }
+  G.section({ id: 'customers', label: 'Customers', order: 32, render: (main, sub) => sub[0] ? customerDetail(main, sub[0]) : customerList(main) });
+
+  /* ---------------- block composer (campaigns and automations) ---------------- */
+  const BLOCKS = { heading: 'Heading', text: 'Text', image: 'Image', button: 'Button', products: 'Products', divider: 'Divider', cart: 'Their cart (abandoned checkout only)' };
+  function blockEditor(root, initial, onChange) {
+    let blocks = JSON.parse(JSON.stringify(initial || []));
+    const prods = (typeof PRODUCTS !== 'undefined' ? PRODUCTS : []).filter(p => !p.sold);
+    const field = (i, k, v, a = '') => `<input class="gya-in" data-b="${i}" data-k="${k}" value="${esc(v || '')}" ${a}>`;
+    const draw = () => {
+      root.innerHTML = `<div class="gya-blocks">${blocks.map((b, i) => `<div class="gya-block"><div class="gya-block-h"><b>${BLOCKS[b.type] || b.type}</b><span class="gya-move"><button type="button" data-mv="${i}" data-d="-1" aria-label="Move up">↑</button><button type="button" data-mv="${i}" data-d="1" aria-label="Move down">↓</button></span><button type="button" class="gya-x" data-rm="${i}" aria-label="Remove block">×</button></div>
+        ${b.type === 'heading' ? field(i, 'text', b.text, 'placeholder="Heading, e.g. Hi {{first_name}}, spring is here"') : ''}
+        ${b.type === 'text' ? `<textarea class="gya-in" rows="4" data-b="${i}" data-k="html" placeholder="Write your message. Basic HTML such as <b>bold</b> and <a href=&quot;...&quot;>links</a> is allowed.">${esc(b.html || '')}</textarea>` : ''}
+        ${b.type === 'image' ? `<div class="gya-grid2">${field(i, 'url', b.url, 'placeholder="Image URL (upload in Media, then paste the link)"')}${field(i, 'alt', b.alt, 'placeholder="Describe the image"')}</div>${field(i, 'link', b.link, 'placeholder="Link when clicked (optional)"')}` : ''}
+        ${b.type === 'button' ? `<div class="gya-grid2">${field(i, 'label', b.label, 'placeholder="Button text"')}${field(i, 'url', b.url, 'placeholder="/#/shop/mailer-boxes or https://..."')}</div>` : ''}
+        ${b.type === 'products' ? `<div class="gya-grid2">${[0, 1, 2].map(j => `<select class="gya-in" data-b="${i}" data-k="p${j}"><option value="">Choose a product</option>${prods.map(p => `<option value="${esc(p.s)}" ${(b.items || [])[j] && b.items[j].slug === p.s ? 'selected' : ''}>${esc(p.n)}</option>`).join('')}</select>`).join('')}</div>` : ''}
+        ${b.type === 'cart' ? '<p class="gya-muted gya-small">Shows the items they left at checkout.</p>' : ''}</div>`).join('') || empty('No content yet. Add a block below.')}</div>
+        <div class="gya-row gya-addblocks">${Object.entries(BLOCKS).map(([k, l]) => `<button type="button" class="gya-btn gya-btn-line gya-btn-sm" data-add="${k}">+ ${l.split(' (')[0]}</button>`).join('')}</div>`;
+    };
+    const read = el => { const b = blocks[+el.dataset.b], k = el.dataset.k;
+      if (/^p\d$/.test(k)) { const j = +k[1], p = prods.find(x => x.s === el.value); b.items = b.items || []; b.items[j] = p ? { slug: p.s, name: p.n, price: p.tiers ? `from $${p.tiers[p.tiers.length - 1][1]}` : `$${Number(p.p).toFixed(2)}`, url: `/#/product/${p.s}`, image: p.img && p.img[0] || '' } : null; b.items = b.items.filter(Boolean); }
+      else b[k] = el.value; onChange && onChange(); };
+    root.addEventListener('input', e => { if (e.target.dataset.b != null) read(e.target); });
+    root.addEventListener('change', e => { if (e.target.dataset.b != null) read(e.target); });
+    root.addEventListener('click', e => {
+      const a = e.target.closest('[data-add]'), rm = e.target.closest('[data-rm]'), mv = e.target.closest('[data-mv]');
+      if (a) { blocks.push({ type: a.dataset.add, ...(a.dataset.add === 'text' ? { html: '' } : {}) }); draw(); onChange && onChange(); }
+      if (rm) { blocks.splice(+rm.dataset.rm, 1); draw(); onChange && onChange(); }
+      if (mv) { const i = +mv.dataset.mv, j = i + +mv.dataset.d; if (j >= 0 && j < blocks.length) { [blocks[i], blocks[j]] = [blocks[j], blocks[i]]; draw(); onChange && onChange(); } }
+    });
+    draw();
+    return { get: () => blocks.map(b => b.type === 'text' ? { ...b, html: /<\w/.test(b.html || '') ? b.html : String(b.html || '').split(/\n{2,}/).map(p => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('') } : b) };
+  }
+
+  /* ---------------- Email campaigns ---------------- */
+  async function campaignList(main) {
+    const [camps, segs] = await Promise.all([rest('campaigns?select=*&order=created_at.desc&limit=200'), rest('segments?select=id,name')]);
+    const segName = id => id ? ((segs.find(s => s.id === id) || {}).name || 'Deleted segment') : 'All subscribers';
+    const sentIds = camps.filter(c => c.status === 'sent').map(c => c.id);
+    let st = {}; try { if (sentIds.length) st = await server('campaign-stats', { ids: sentIds }); } catch (e) { toast(e.message, true); }
+    main.innerHTML = head('Email campaigns', 'Compose, schedule, send. Only subscribed customers with a recorded consent basis ever receive a campaign.',
+      '<a class="gya-btn gya-btn-line" href="#/admin/emaillog">Email log</a><a class="gya-btn gya-btn-red" href="#/admin/campaigns/new">New campaign</a>') + `
+      <section class="gya-card gya-pad0">${camps.length ? `<div class="gya-table-wrap"><table class="gya-table gya-camps"><thead><tr><th>Campaign</th><th>Status</th><th>Audience</th><th>Scheduled / sent</th><th>Recipients</th><th>Delivered</th><th>Opens</th><th>Clicks</th><th>Revenue</th><th>Actions</th></tr></thead><tbody>
+        ${camps.map(c => { const s = st[c.id], n = c.recipients || (s && s.sent) || 0; return `<tr><td><a href="#/admin/campaigns/${c.id}"><b>${esc(c.name)}</b></a>${c.series ? `<br><span class="gya-tag">series: ${esc(c.series)}</span>` : ''}${c.preview_text ? `<div class="gya-muted gya-small">${esc(c.preview_text)}</div>` : ''}</td>
+          <td>${pill(c.status)}</td><td>${esc(segName(c.segment_id))}</td><td>${dtt(c.sent_at || c.scheduled_at) || '–'}</td><td>${c.status === 'sent' ? n : '–'}</td>
+          <td>${s ? `${pct(s.delivered, s.sent)}${s.bounced ? ` <span class="gya-warn-t">· ${s.bounced} bounced</span>` : ''}` : '–'}</td><td>${s ? pct(s.opened, s.delivered || s.sent) : '–'}</td><td>${s ? pct(s.clicked, s.delivered || s.sent) : '–'}</td>
+          <td>${s && s.revenue_cents ? $c(s.revenue_cents) : '–'}</td>
+          <td class="gya-nowrap">${c.status === 'sent' ? `<a class="gya-btn gya-btn-line gya-btn-sm" href="#/admin/campaigns/${c.id}/results">Results</a>` : `<a class="gya-btn gya-btn-line gya-btn-sm" href="#/admin/campaigns/${c.id}">Edit</a>`} <button class="gya-btn gya-btn-line gya-btn-sm" data-dup="${c.id}">Duplicate</button></td></tr>`; }).join('')}
+        </tbody></table></div>` : empty('No campaigns yet. Start one with “New campaign”.')}</section>`;
+    qsa('[data-dup]', main).forEach(b => b.onclick = () => busy(b, async () => { const n = await server('campaign-duplicate', { campaign_id: b.dataset.dup }); location.hash = `#/admin/campaigns/${n.id}`; }));
+  }
+  async function campaignEdit(main, id) {
+    const segs = await rest('segments?select=id,name&order=name');
+    let c = id === 'new' ? { name: '', subject: '', preview_text: '', series: '', blocks: [{ type: 'heading', text: 'Hi {{first_name}},' }, { type: 'text', html: '' }, { type: 'button', label: 'Shop now', url: '/#/shop' }], segment_id: null, status: 'draft' }
+      : (await rest(`campaigns?select=*&id=eq.${enc(id)}`))[0];
+    if (!c) { main.innerHTML = head('Campaign not found'); return; }
+    const locked = c.status !== 'draft';
+    main.innerHTML = head(id === 'new' ? 'New campaign' : esc(c.name), `${pill(c.status)} <a class="gya-link" href="#/admin/campaigns">Back to campaigns</a>`,
+      locked ? (c.status === 'scheduled' ? '<button class="gya-btn gya-btn-line" id="caUnsched">Unschedule</button>' : c.status === 'sent' ? `<a class="gya-btn gya-btn-line" href="#/admin/campaigns/${c.id}/results">Results</a>` : '')
+        : '<button class="gya-btn gya-btn-line" id="caSave">Save draft</button><button class="gya-btn gya-btn-line" id="caTest">Send test to me</button>') + `
+      ${c.status === 'scheduled' ? `<div class="gya-card gya-note">Scheduled for <b>${dtt(c.scheduled_at)}</b>. Unschedule it to make changes.</div>` : ''}
+      <div class="gya-grid2 gya-compose"><div>
+        <section class="gya-card"><h3>Campaign</h3>${ui.field('Name (only staff see this)', ui.text('name', c.name, locked ? 'disabled' : ''))}${ui.field('Series tag (optional)', ui.text('series', c.series || '', locked ? 'disabled' : ''), 'Groups related sends, e.g. "spring-sale"')}
+          ${ui.field('Subject line', ui.text('subject', c.subject, (locked ? 'disabled ' : '') + 'maxlength="150"'))}${ui.field('Preview text', ui.text('preview_text', c.preview_text || '', (locked ? 'disabled ' : '') + 'maxlength="150"'), 'Shown after the subject in most inboxes')}
+          ${ui.field('Audience', ui.select('segment_id', [['', 'All subscribers'], ...segs.map(s => [s.id, s.name])], c.segment_id || ''), '<span id="caCount">Counting…</span> · Only subscribed customers with a consent record are included.')}</section>
+        <section class="gya-card"><h3>Content</h3><p class="gya-muted gya-small">Use {{first_name}} to greet people by name. The unsubscribe link and business details are added automatically.</p><div id="caBlocks"></div></section>
+        ${locked ? '' : `<section class="gya-card"><h3>Send</h3><div class="gya-row"><input class="gya-in" type="datetime-local" id="caAt"><button class="gya-btn gya-btn-line" id="caSched">Schedule</button><span class="gya-muted">or</span><button class="gya-btn gya-btn-red" id="caSend">Send now</button></div>
+          <p class="gya-muted gya-small">Scheduled campaigns go out at the next daily send (early morning, Sydney time) after the chosen time.</p></section>`}
+      </div><div><section class="gya-card gya-sticky"><div class="gya-cardhead"><h3>Preview</h3><button class="gya-btn gya-btn-line gya-btn-sm" id="caPrev">Refresh</button></div><iframe id="caFrame" title="Email preview" class="gya-preview"></iframe></section></div></div>`;
+    if (locked) qsa('select[name=segment_id]', main).forEach(s => s.disabled = true);
+    const ed = blockEditor(qs('#caBlocks', main), c.blocks, () => { G.markDirty && G.markDirty(); schedulePreview(); });
+    if (locked) qsa('#caBlocks input, #caBlocks textarea, #caBlocks select, #caBlocks button', main).forEach(x => x.disabled = true);
+    const val = () => { const v = n => qs(`[name=${n}]`, main).value.trim(); return { name: v('name') || v('subject') || 'Untitled campaign', series: v('series') || null, subject: v('subject'), preview_text: v('preview_text') || null, segment_id: v('segment_id') || null, blocks: ed.get() }; };
+    const count = async () => { try { const r = await server('audience-count', { segment_id: qs('[name=segment_id]', main).value || null }); qs('#caCount', main).textContent = `${r.count} ${r.count === 1 ? 'person' : 'people'} will receive this`; } catch (e) { qs('#caCount', main).textContent = e.message; } };
+    let pt; const schedulePreview = () => { clearTimeout(pt); pt = setTimeout(preview, 600); };
+    const preview = async () => { try { const r = await server('campaign-preview', { campaign: { ...val(), id: c.id } }); qs('#caFrame', main).srcdoc = r.html; } catch (e) { qs('#caFrame', main).srcdoc = `<p style="font:14px sans-serif;color:#b00">${esc(e.message)}</p>`; } };
+    qs('[name=segment_id]', main).onchange = count; qsa('.gya-compose input[name]', main).forEach(i => i.oninput = schedulePreview);
+    qs('#caPrev', main).onclick = preview; count(); preview();
+    const save = async () => { const body = { ...val(), updated_at: new Date().toISOString() };
+      if (!c.id) { const [n] = await rest('campaigns', { method: 'POST', body: { ...body, status: 'draft' }, prefer: 'return=representation' }); c = n; history.replaceState(null, '', `#/admin/campaigns/${n.id}`); }
+      else await rest(`campaigns?id=eq.${enc(c.id)}`, { method: 'PATCH', body });
+      G.markClean && G.markClean(); return c; };
+    const b = id => qs(id, main);
+    if (b('#caSave')) b('#caSave').onclick = e => busy(e.target, async () => { await save(); toast('Draft saved'); });
+    if (b('#caTest')) b('#caTest').onclick = e => busy(e.target, async () => { const r = await server('campaign-test', { campaign: { ...val(), id: c.id || null } }); toast(`Test sent to ${r.to}`); });
+    if (b('#caSched')) b('#caSched').onclick = e => { const at = b('#caAt').value; if (!at) { toast('Choose a date and time first', true); return; }
+      busy(e.target, async () => { await save(); await server('campaign-schedule', { campaign_id: c.id, at: new Date(at).toISOString() }); toast('Scheduled'); campaignEdit(main, c.id); }); };
+    if (b('#caSend')) b('#caSend').onclick = e => { const v = val(); if (!v.subject) { toast('Add a subject line first', true); return; }
+      if (!confirm(`Send “${v.subject}” now? ${qs('#caCount', main).textContent}. This can't be undone.`)) return;
+      busy(e.target, async () => { await save(); const r = await server('campaign-send', { campaign_id: c.id }); toast(`Sent to ${r.recipients} people`); location.hash = `#/admin/campaigns/${c.id}/results`; }); };
+    if (b('#caUnsched')) b('#caUnsched').onclick = e => busy(e.target, async () => { await server('campaign-unschedule', { campaign_id: c.id }); campaignEdit(main, c.id); });
+  }
+  async function campaignResults(main, id) {
+    const [c] = await rest(`campaigns?select=*&id=eq.${enc(id)}`); if (!c) { main.innerHTML = head('Campaign not found'); return; }
+    const [st, logs] = await Promise.all([server('campaign-stats', { ids: [id] }), rest(`email_log?select=to_email,status,bounce_reason,opened_at,clicked_at,created_at&campaign_id=eq.${enc(id)}&kind=eq.campaign&order=created_at&limit=1000`)]);
+    const s = st[id] || {};
+    main.innerHTML = head(`Results: ${esc(c.name)}`, `${pill(c.status)} Sent ${dtt(c.sent_at)} · “${esc(c.subject)}” · <a class="gya-link" href="#/admin/campaigns">Back to campaigns</a>`,
+      `<button class="gya-btn gya-btn-line" id="rsDup">Duplicate</button>`) + `
+      <div class="gya-stats">${card('Recipients', s.sent || 0)}${card('Delivered', pct(s.delivered, s.sent), `${s.delivered || 0} emails`)}${card('Bounced', s.bounced || 0)}${card('Opened', pct(s.opened, s.delivered || s.sent), `${s.opened || 0} people`)}${card('Clicked', pct(s.clicked, s.delivered || s.sent), `${s.clicked || 0} people`)}${card('Revenue', $c(s.revenue_cents), `${s.orders || 0} orders from this campaign`)}</div>
+      <p class="gya-muted gya-small">Opens are approximate: some email apps block tracking images, others open every email automatically.</p>
+      <section class="gya-card gya-pad0"><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Recipient</th><th>Status</th><th>Opened</th><th>Clicked</th></tr></thead><tbody>
+      ${logs.map(l => `<tr><td>${esc(l.to_email)}</td><td>${pill(l.status === 'delivered' ? 'delivered_mail' : l.status)}${l.bounce_reason ? `<div class="gya-warn-t gya-small">${esc(l.bounce_reason)}</div>` : ''}</td><td>${dtt(l.opened_at) || '–'}</td><td>${dtt(l.clicked_at) || '–'}</td></tr>`).join('')}</tbody></table></div></section>`;
+    qs('#rsDup', main).onclick = e => busy(e.target, async () => { const n = await server('campaign-duplicate', { campaign_id: id }); location.hash = `#/admin/campaigns/${n.id}`; });
+  }
+  G.section({ id: 'campaigns', label: 'Email campaigns', order: 34, render: (main, sub) => sub[1] === 'results' ? campaignResults(main, sub[0]) : sub[0] ? campaignEdit(main, sub[0]) : campaignList(main) });
+
+  /* ---------------- Segments ---------------- */
+  const RULES = {
+    category: { label: 'Bought from category', ops: [['includes', 'includes'], ['excludes', 'has not bought from']], kind: 'category' },
+    last_order: { label: 'Last order', ops: [['within', 'within the last … days'], ['more_than', 'more than … days ago'], ['never', 'has never ordered']], kind: 'number' },
+    total_spent: { label: 'Total spent ($)', ops: [['gte', 'at least'], ['lte', 'at most']], kind: 'number' },
+    orders: { label: 'Number of orders', ops: [['gte', 'at least'], ['lte', 'at most']], kind: 'number' },
+    state: { label: 'State', ops: [['in', 'is one of'], ['not_in', 'is not one of']], kind: 'states' },
+    tag: { label: 'Tag', ops: [['has', 'has'], ['lacks', 'does not have']], kind: 'text' },
+    subscribed: { label: 'Subscribed', ops: [['within', 'within the last … days']], kind: 'number' },
+  };
+  async function segmentList(main) {
+    const segs = await rest('segments?select=*&order=name');
+    main.innerHTML = head('Segments', 'Saved audiences for campaigns. Counts only include people who can legally receive marketing email.', '<a class="gya-btn gya-btn-red" href="#/admin/segments/new">New segment</a>') + `
+      <section class="gya-card gya-pad0">${segs.length ? `<table class="gya-table"><thead><tr><th>Segment</th><th>Rules</th><th>People</th></tr></thead><tbody>${segs.map(s => `<tr class="gya-click" data-href="#/admin/segments/${s.id}"><td><a href="#/admin/segments/${s.id}"><b>${esc(s.name)}</b></a></td>
+        <td class="gya-muted">${((s.rules || {}).rules || []).map(r => `${(RULES[r.field] || {}).label || r.field} ${((RULES[r.field] || { ops: [] }).ops.find(o => o[0] === r.op) || [, r.op])[1]} ${esc([].concat(r.value ?? '').join(', '))}`).join(s.rules && s.rules.match === 'any' ? ' OR ' : ' AND ') || 'Everyone'}</td><td data-count="${s.id}">…</td></tr>`).join('')}</tbody></table>` : empty('No segments yet.')}</section>`;
+    clickRows(main);
+    for (const s of segs) server('segment-preview', { segment_id: s.id }).then(r => { const el = qs(`[data-count="${s.id}"]`, main); if (el) el.textContent = r.count; }).catch(() => {});
+  }
+  async function segmentEdit(main, id) {
+    const cats = await rest('categories?select=slug,name&order=position');
+    let s = id === 'new' ? { name: '', rules: { match: 'all', rules: [{ field: 'category', op: 'includes', value: cats[0] && cats[0].slug }] } } : (await rest(`segments?select=*&id=eq.${enc(id)}`))[0];
+    if (!s) { main.innerHTML = head('Segment not found'); return; }
+    let rules = JSON.parse(JSON.stringify(s.rules.rules || []));
+    main.innerHTML = head(id === 'new' ? 'New segment' : esc(s.name), '<a class="gya-link" href="#/admin/segments">Back to segments</a>', `${id !== 'new' ? '<button class="gya-btn gya-btn-line" id="sgDel">Delete</button>' : ''}<button class="gya-btn gya-btn-red" id="sgSave">Save segment</button>`) + `
+      <section class="gya-card">${ui.field('Name', ui.text('name', s.name))}
+        <p>Include subscribers who match ${ui.select('match', [['all', 'all'], ['any', 'any']], s.rules.match || 'all')} of these rules:</p><div id="sgRules"></div>
+        <button class="gya-btn gya-btn-line gya-btn-sm" id="sgAdd">+ Add rule</button>
+        <div class="gya-note" style="margin-top:16px"><b id="sgCount">…</b> <span id="sgSample" class="gya-muted"></span></div></section>`;
+    const valueInput = (r, i) => { const k = RULES[r.field].kind;
+      if (r.op === 'never') return '';
+      if (k === 'category') return `<select class="gya-in" data-i="${i}" data-k="value">${cats.map(c => `<option value="${esc(c.slug)}" ${c.slug === r.value ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+      if (k === 'states') return `<span class="gya-checks">${STATES.map(st => `<label class="gya-check"><input type="checkbox" data-i="${i}" data-state="${st}" ${[].concat(r.value || []).includes(st) ? 'checked' : ''}><span>${st}</span></label>`).join('')}</span>`;
+      return `<input class="gya-in gya-in-sm" data-i="${i}" data-k="value" value="${esc(r.value ?? '')}" ${k === 'number' ? 'type="number" min="0"' : ''}>`; };
+    const draw = () => { qs('#sgRules', main).innerHTML = rules.map((r, i) => `<div class="gya-rule">${`<select class="gya-in" data-i="${i}" data-k="field">${Object.entries(RULES).map(([k, v]) => `<option value="${k}" ${k === r.field ? 'selected' : ''}>${v.label}</option>`).join('')}</select>`}
+      <select class="gya-in" data-i="${i}" data-k="op">${RULES[r.field].ops.map(([k, l]) => `<option value="${k}" ${k === r.op ? 'selected' : ''}>${l}</option>`).join('')}</select>${valueInput(r, i)}<button class="gya-x" data-rmr="${i}" aria-label="Remove rule">×</button></div>`).join('') || '<p class="gya-muted">No rules: everyone subscribed.</p>'; };
+    let t; const recount = () => { clearTimeout(t); t = setTimeout(async () => { try { const r = await server('segment-preview', { rules: { match: qs('[name=match]', main).value, rules } });
+      qs('#sgCount', main).textContent = `${r.count} of ${r.eligible} subscribers match.`; qs('#sgSample', main).textContent = r.sample.length ? `e.g. ${r.sample.slice(0, 4).join(', ')}` : ''; } catch (e) { qs('#sgCount', main).textContent = e.message; } }, 300); };
+    const root = qs('#sgRules', main);
+    root.addEventListener('change', e => { const el = e.target, i = +el.dataset.i, r = rules[i]; if (!r) return;
+      if (el.dataset.state) { const set = new Set([].concat(r.value || [])); el.checked ? set.add(el.dataset.state) : set.delete(el.dataset.state); r.value = [...set]; }
+      else if (el.dataset.k === 'field') { r.field = el.value; r.op = RULES[r.field].ops[0][0]; r.value = RULES[r.field].kind === 'category' ? cats[0] && cats[0].slug : RULES[r.field].kind === 'states' ? [] : ''; draw(); }
+      else if (el.dataset.k === 'op') { r.op = el.value; draw(); } else r.value = RULES[r.field].kind === 'number' ? Number(el.value) : el.value;
+      recount(); });
+    root.addEventListener('input', e => { const el = e.target; if (el.dataset.k === 'value') { rules[+el.dataset.i].value = RULES[rules[+el.dataset.i].field].kind === 'number' ? Number(el.value) : el.value; recount(); } });
+    root.addEventListener('click', e => { const b = e.target.closest('[data-rmr]'); if (b) { rules.splice(+b.dataset.rmr, 1); draw(); recount(); } });
+    qs('#sgAdd', main).onclick = () => { rules.push({ field: 'last_order', op: 'within', value: 90 }); draw(); recount(); };
+    qs('[name=match]', main).onchange = recount;
+    qs('#sgSave', main).onclick = e => busy(e.target, async () => { const body = { name: qs('[name=name]', main).value.trim() || 'Untitled segment', rules: { match: qs('[name=match]', main).value, rules }, updated_at: new Date().toISOString() };
+      if (id === 'new') { const [n] = await rest('segments', { method: 'POST', body, prefer: 'return=representation' }); location.hash = `#/admin/segments/${n.id}`; }
+      else await rest(`segments?id=eq.${enc(id)}`, { method: 'PATCH', body }); toast('Segment saved'); });
+    const del = qs('#sgDel', main); if (del) del.onclick = e => { if (confirm('Delete this segment? Campaigns using it will go to all subscribers instead.')) busy(e.target, async () => { await rest(`segments?id=eq.${enc(id)}`, { method: 'DELETE' }); location.hash = '#/admin/segments'; }); };
+    draw(); recount();
+  }
+  G.section({ id: 'segments', label: 'Segments', order: 35, render: (main, sub) => sub[0] ? segmentEdit(main, sub[0]) : segmentList(main) });
+
+  /* ---------------- Automations ---------------- */
+  G.section({ id: 'automations', label: 'Automations', order: 36, async render(main) {
+    const [flows, sends, cats] = await Promise.all([rest('automation_flows?select=*&order=key'), rest('automation_sends?select=flow_key'), rest('categories?select=slug,name&order=position')]);
+    const count = k => sends.filter(s => s.flow_key === k).length;
+    const ORDER = ['welcome', 'abandoned_cart', 'post_purchase', 'win_back']; flows.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
+    main.innerHTML = head('Automations', 'Emails that send themselves. Each only goes to subscribed customers with a consent record, and never twice for the same reason.',
+      '<button class="gya-btn gya-btn-line" id="auRun">Run now</button>') + flows.map(f => { const days = f.delay_hours % 24 === 0 && f.delay_hours >= 24;
+      return `<section class="gya-card gya-flow" data-flow="${f.key}"><div class="gya-cardhead"><h3>${esc(f.name)} ${f.enabled ? pill('sent', 'On') : pill('draft', 'Off')}</h3><span class="gya-muted gya-small">${count(f.key)} sent so far</span></div>
+        <p class="gya-muted">${esc(f.description || '')}</p>
+        ${ui.check('enabled', f.enabled, 'Switched on')}
+        <div class="gya-row">${ui.field('Send after', `<span class="gya-row"><input class="gya-in gya-in-sm" type="number" min="0" name="delay" value="${days ? f.delay_hours / 24 : f.delay_hours}">${ui.select('unit', [['h', 'hours'], ['d', 'days']], days ? 'd' : 'h')}</span>`,
+          { welcome: 'after they subscribe', abandoned_cart: 'after checkout was started without paying', post_purchase: 'after the order was paid', win_back: 'since their last order' }[f.key])}</div>
+        ${f.key === 'post_purchase' ? ui.field('Only after orders from these categories', `<span class="gya-checks">${cats.map(c => `<label class="gya-check"><input type="checkbox" name="cat" value="${esc(c.slug)}" ${(f.categories || []).includes(c.slug) ? 'checked' : ''}><span>${esc(c.name)}</span></label>`).join('')}</span>`) : ''}
+        <div class="gya-grid2">${ui.field('Subject', ui.text('subject', f.subject))}${ui.field('Preview text', ui.text('preview_text', f.preview_text || ''))}</div>
+        <details class="gya-adv"><summary><h3>Email content</h3></summary><div class="gya-flowblocks"></div></details>
+        <button class="gya-btn gya-btn-red" data-save="${f.key}">Save</button></section>`; }).join('');
+    const eds = {};
+    flows.forEach(f => { eds[f.key] = blockEditor(qs(`[data-flow="${f.key}"] .gya-flowblocks`, main), f.blocks); });
+    qsa('[data-save]', main).forEach(b => b.onclick = () => busy(b, async () => { const box = b.closest('[data-flow]'), v = n => qs(`[name=${n}]`, box);
+      const n = Math.max(0, parseInt(v('delay').value, 10) || 0), hours = v('unit').value === 'd' ? n * 24 : n;
+      const body = { enabled: v('enabled').checked, delay_hours: hours, subject: v('subject').value.trim() || 'Hello from Avanti', preview_text: v('preview_text').value.trim() || null,
+        blocks: eds[b.dataset.save].get(), updated_at: new Date().toISOString() };
+      if (b.dataset.save === 'post_purchase') body.categories = qsa('[name=cat]:checked', box).map(x => x.value);
+      await rest(`automation_flows?key=eq.${b.dataset.save}`, { method: 'PATCH', body }); toast('Automation saved'); this.render(main); }));
+    qs('#auRun', main).onclick = e => busy(e.target, async () => { const r = await server('run-automations', {}); const a = r.automations || {};
+      toast(`Sent: ${Object.entries(a).map(([k, n]) => `${n} ${k.replace('_', ' ')}`).join(', ') || 'nothing due'}`); this.render(main); });
+  } });
+
+  /* ---------------- Email log ---------------- */
+  const lf = { kind: '', status: '', q: '' };
+  G.section({ id: 'emaillog', label: 'Email log', order: 37, async render(main) {
+    main.innerHTML = head('Email log', 'Every email the shop has sent, with delivery status from the email provider.') + `
+      <div class="gya-filters lfilters"><select class="gya-in" id="lfKind"><option value="">All emails</option><option value="transactional">Order emails</option><option value="campaign">Campaigns</option><option value="automation">Automations</option><option value="test">Tests</option></select>
+        <select class="gya-in" id="lfStatus"><option value="">Any status</option><option value="delivered">Delivered</option><option value="sent">Sent</option><option value="bounced">Bounced</option><option value="complained">Complaint</option><option value="failed">Failed</option><option value="logged">Logged only</option></select>
+        <input class="gya-in gya-search" id="lfQ" placeholder="Search recipient"></div><section class="gya-card gya-pad0"><div id="lfList"></div></section>`;
+    qs('#lfKind', main).value = lf.kind; qs('#lfStatus', main).value = lf.status; qs('#lfQ', main).value = lf.q;
+    let offset = 0, rows = [];
+    const draw = async (more) => { if (!more) { offset = 0; rows = []; }
+      let q = `select=*&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
+      if (lf.kind) q += `&kind=eq.${lf.kind}`; if (lf.status) q += `&status=eq.${lf.status}`;
+      const term = lf.q.replace(/[(),*%]/g, ' ').trim(); if (term) q += `&to_email=ilike.*${enc(term)}*`;
+      const got = await rest(`email_log?${q}`); rows = rows.concat(got.slice(0, PAGE)); offset += PAGE;
+      const kind = { transactional: 'Order', campaign: 'Campaign', automation: 'Automation', test: 'Test' };
+      qs('#lfList', main).innerHTML = rows.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Sent</th><th>To</th><th>Email</th><th>Status</th><th>Opened</th><th>Clicked</th></tr></thead><tbody>
+        ${rows.map(l => `<tr><td class="gya-nowrap">${dtt(l.created_at)}</td><td>${esc(l.to_email)}</td><td><span class="gya-tag">${kind[l.kind] || l.kind}</span> ${esc(l.subject || l.template || '')}${l.order_id ? ` <a class="gya-link" href="#/admin/orders/${l.order_id}">order</a>` : ''}${l.campaign_id && l.kind === 'campaign' ? ` <a class="gya-link" href="#/admin/campaigns/${l.campaign_id}/results">campaign</a>` : ''}</td>
+          <td>${pill(l.status === 'delivered' ? 'delivered_mail' : l.status)}${l.bounce_reason ? `<div class="gya-warn-t gya-small">${esc(l.bounce_reason)}</div>` : ''}${l.error ? `<div class="gya-warn-t gya-small">${esc(l.error)}</div>` : ''}</td><td>${l.opened_at ? '✓' : ''}</td><td>${l.clicked_at ? '✓' : ''}</td></tr>`).join('')}</tbody></table></div>
+        ${got.length > PAGE ? '<p style="text-align:center;padding:12px"><button class="gya-btn gya-btn-line" id="lfMore">Load more</button></p>' : ''}` : empty('No emails match.');
+      const m = qs('#lfMore', main); if (m) m.onclick = () => draw(true); };
+    let t; const change = () => { lf.kind = qs('#lfKind', main).value; lf.status = qs('#lfStatus', main).value; lf.q = qs('#lfQ', main).value; clearTimeout(t); t = setTimeout(() => draw(), 250); };
+    qsa('.lfilters .gya-in', main).forEach(el => { el.oninput = change; el.onchange = change; });
+    await draw();
+  } });
+})(GYA);
+
 /* ==== GYA CMS adapter : Avanti ================================================
    The only site-specific part. It maps database rows onto the storefront's own
    data (CATS, PRODUCTS, SHIPPING, TPLS, VPRICE, POSTS, PAGES, FAQ_*) in place,
@@ -2744,16 +3486,25 @@ function unitPrice(p, qty, opts){
 
 /* ---- cart (in-memory) ---- */
 const cart = { lines: [] };
+/* The cart is kept in this browser so it survives the trip to Stripe/PayPal and back.
+   Artwork files can't be stored in the browser, so they live in memory (cartFiles) until checkout. */
+const CART_KEY='avanti.cart.v1', cartFiles=new Map();
+function saveCart(){ try{ localStorage.setItem(CART_KEY, JSON.stringify(cart.lines.map(l=>({...l, art:l.art?{...l.art, files:l.art.files?l.art.files.map(({file,thumb,...f})=>f):undefined}:null})))); }catch(e){} }
+function restoreCart(){ try{ const s=JSON.parse(localStorage.getItem(CART_KEY)||'[]'); if(Array.isArray(s)) s.forEach(l=>{ if(l&&l.key&&prod(l.slug)&&!cart.lines.some(x=>x.key===l.key)) cart.lines.push(l); }); }catch(e){} }
+function clearCart(){ cart.lines=[]; cartFiles.clear(); renderCart(); }
 function cartKey(slug, opts){ return slug+'|'+Object.entries(opts||{}).map(([k,v])=>k+'='+v).join('&'); }
 function addToCart(slug, qty, opts, art){
   const key = cartKey(slug,opts) + (art&&art.files? '|art:'+art.files.map(f=>f.name).join(','):'') + (art&&art.later?'|art:later':'');
   const ex = cart.lines.find(l=>l.key===key);
   if(ex) ex.qty += qty; else cart.lines.push({key, slug, qty, opts:opts||{}, art:art||null});
+  if(art&&art.files&&art.files.some(f=>f.file)) cartFiles.set(key, art.files.map(f=>f.file||null));
   renderCart(); toast(`Added to cart`); openDrawer('cart');
 }
 function setQty(key, qty){ const l = cart.lines.find(l=>l.key===key); if(!l) return; l.qty = Math.max(0, qty|0); if(!l.qty) cart.lines = cart.lines.filter(x=>x!==l); renderCart(); }
 function cartTotal(){ return cart.lines.reduce((s,l)=>s+unitPrice(prod(l.slug),l.qty,l.opts)*l.qty,0); }
 function renderCart(){
+  cart.lines = cart.lines.filter(l=>prod(l.slug));   // drop anything no longer sold
+  saveCart();
   const count = cart.lines.reduce((s,l)=>s+l.qty,0);
   $('#cartCount').textContent = count||'';
   const body = $('#cartBody');
@@ -2788,7 +3539,7 @@ function renderCart(){
 document.addEventListener('click', e=>{
   const q = e.target.closest('[data-q]'); if(q){ const l=cart.lines.find(l=>l.key===q.dataset.q); setQty(q.dataset.q, l.qty+ +q.dataset.d); }
   const rm = e.target.closest('[data-rm]'); if(rm){ e.preventDefault(); setQty(rm.dataset.rm,0); }
-  if(e.target.id==='checkoutBtn'){ toast('Checkout is the next build step. Delivery options and payment go here.'); }
+  if(e.target.id==='checkoutBtn'){ location.hash = '#/checkout'; }
 });
 document.addEventListener('change', e=>{ if(e.target.dataset.qin) setQty(e.target.dataset.qin, +e.target.value); });
 
@@ -3283,7 +4034,7 @@ function artStudio(p){
     if(supplyMode()==='design') return Object.assign({design:$('#designPack').value}, orv?{orient:orv}:{});
     if(later.checked && !sides[0].file) return Object.assign({later:true}, orv?{orient:orv}:{});
     const out=[]; sides.forEach((s,i)=>{ if(!s.file || (i===1&&singleSided())) return;
-      const e={side:cfg.sides===2?cfg.tabs[i]:'Artwork', name:s.file.name, thumb:s.isPdf?null:s.url};
+      const e={side:cfg.sides===2?cfg.tabs[i]:'Artwork', name:s.file.name, thumb:s.isPdf?null:s.url, file:s.file};
       if(s.isPdf) e.info='Print-ready PDF';
       else { const dpi=dpiNow(s); e.info=`${s.imgW}×${s.imgH}px · ${dpi} DPI (${dpiVerdict(dpi).label}) · ${s.mode==='fill'?'Fill':'Fit'}${s.zoom>1?` · ${s.zoom.toFixed(1)}×`:''}`; }
       out.push(e); });
@@ -3404,6 +4155,137 @@ function pageStatic(k){ const pg=PAGES[k]; if(!pg) return page404(); return `<di
 function page404(){ return `<div class="wrap" style="padding:80px 0;text-align:center"><span class="eyebrow">404</span><h1 style="font-size:2.4rem">That page isn't here.</h1><p style="color:var(--ink-3);margin:12px 0 24px">Try the shop or head home.</p><a class="btn btn-ink" href="#/shop">Browse the shop</a></div>`; }
 
 /* ---- router ---- */
+/* ---- checkout and order pages ----
+   Prices, delivery and totals come from the server (/api/checkout), never from this page.
+   The order only becomes "paid" when Stripe or PayPal confirms it to the server. */
+const API_BASE = (window.GYA_CMS_CONFIG && window.GYA_CMS_CONFIG.apiBase) || '/api';
+const STATES_AU = ['NSW','VIC','QLD','SA','WA','TAS','ACT','NT'];
+const cents$ = c => money((c||0)/100);
+function noteCampaign(){ try{ const c=new URLSearchParams(location.search).get('c'); if(c&&/^[0-9a-f-]{36}$/.test(c)) localStorage.setItem('avanti.campaign', JSON.stringify({id:c, at:Date.now()})); }catch(e){} }
+function campaignRef(){ try{ const c=JSON.parse(localStorage.getItem('avanti.campaign')||'null'); return c&&Date.now()-c.at<7*86400000?c.id:null; }catch(e){ return null; } }
+async function apiCall(path, body){
+  const r = await fetch(API_BASE+path, body===undefined?{}:{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  let d={}; try{ d=await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(d.error||'Something went wrong. Please try again.');
+  return d;
+}
+const cartForServer = () => cart.lines.map(l=>({slug:l.slug, qty:l.qty, opts:l.opts, art:l.art?{later:!!l.art.later, design:l.art.design||null, files:(l.art.files||[]).map(f=>({side:f.side, name:f.name, info:f.info||''}))}:null}));
+
+function pageCheckout(params){
+  if(!cart.lines.length) return `<div class="page-head"><div class="wrap"><span class="eyebrow">Checkout</span><h1>Your cart is empty</h1><p>Add something from the shop and come back here to pay.</p></div></div><div class="wrap" style="padding-bottom:72px"><a class="btn btn-red btn-lg" href="#/shop">Browse the shop</a></div>`;
+  const inp=(id,label,a='')=>`<div><label for="${id}">${label}</label><input id="${id}" ${a}></div>`;
+  return `<div class="page-head"><div class="wrap"><span class="eyebrow">Checkout</span><h1>Almost done.</h1><p>Secure payment by card, Apple Pay, Google Pay or PayPal. Prices include GST.</p></div></div>
+  <div class="wrap co-grid">
+    <form class="form co-form" id="coForm" novalidate>
+      <div id="coNotice" aria-live="polite">${params.get('cancelled')?`<div class="co-note">Payment was cancelled, so you haven't been charged. Your cart is still here.</div>`:''}</div>
+      <h3>Contact</h3>
+      <div class="two">${inp('coEmail','Email','type="email" autocomplete="email" required')}${inp('coPhone','Phone','type="tel" autocomplete="tel"')}</div>
+      <div class="two">${inp('coName','Full name','autocomplete="name" required')}${inp('coCompany','Company <span class="co-opt">optional</span>','autocomplete="organization"')}</div>
+      <h3>Delivery address</h3>
+      ${inp('coLine1','Street address','autocomplete="address-line1" required')}
+      ${inp('coLine2','Apartment, unit or building <span class="co-opt">optional</span>','autocomplete="address-line2"')}
+      <div class="co-three">${inp('coSuburb','Suburb','autocomplete="address-level2" required')}
+        <div><label for="coState">State</label><select id="coState" autocomplete="address-level1" required><option value="">Choose</option>${STATES_AU.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        ${inp('coPostcode','Postcode','inputmode="numeric" maxlength="4" pattern="\\d{4}" autocomplete="postal-code" required')}</div>
+      <h3>Delivery</h3><div id="coDelivery"><p class="co-muted">Loading delivery options…</p></div>
+      <h3>Anything we should know? <span class="co-opt">optional</span></h3>
+      <div><textarea id="coNote" rows="3" placeholder="Delivery instructions, event date, artwork notes…"></textarea></div>
+      <label class="co-check"><input type="checkbox" id="coOptin"><span>Email me news and offers from Avanti Print &amp; Design. You can unsubscribe at any time.</span></label>
+      <h3>Payment</h3><div id="coPay"><p class="co-muted">Loading payment options…</p></div>
+      <button class="btn btn-red btn-lg btn-block" id="coSubmit" type="submit" disabled>Pay securely</button>
+      <p class="co-muted co-small">You'll be taken to a secure payment page. Your order is confirmed once payment is approved, and we'll email you a receipt.</p>
+    </form>
+    <aside class="co-summary" id="coSummary"><h3>Your order</h3><div id="coLines"></div><div id="coTotals"></div></aside>
+  </div>`;
+}
+
+async function wireCheckout(params){
+  if(!cart.lines.length) return;
+  const $n=$('#coNotice'), note=(msg,bad)=>{ $n.innerHTML=`<div class="co-note${bad?' bad':''}">${msg}</div>`; $n.scrollIntoView({behavior:'smooth',block:'center'}); };
+  const offline = () => { $('#coDelivery').innerHTML=''; $('#coPay').innerHTML='';
+    note(`Online payment isn't available just yet. Please call us on <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email your order</a> and we'll look after it.`, true); };
+  // lines whose artwork file was lost when the page reloaded
+  const lost = cart.lines.filter(l=>l.art&&l.art.files&&l.art.files.length&&!cartFiles.has(l.key));
+  $('#coLines').innerHTML = cart.lines.map(l=>{ const p=prod(l.slug); return `<div class="co-line"><div class="thumb">${thumb(p)}</div><div><b>${esc(p.n)}</b> <span class="co-qty">× ${l.qty}</span>
+    ${Object.keys(l.opts).length?`<div class="co-muted co-small">${Object.values(l.opts).map(esc).join(' · ')}</div>`:''}
+    ${l.art&&l.art.later?'<div class="co-muted co-small">Artwork to follow</div>':''}${lost.includes(l)?'<div class="co-warn">Artwork needs re-uploading, or send it after checkout</div>':''}</div><div class="co-price" data-line="${esc(l.key)}">${money(unitPrice(p,l.qty,l.opts)*l.qty)}</div></div>`; }).join('');
+  if(lost.length) note(`The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} couldn't be kept when the page reloaded. You can pay now and email the artwork afterwards, or remove the item and add it again with the file.`);
+  let q=null, cfg=null, choice={};
+  const totals=()=>{ if(!q) return; let del=0; q.delivery.groups.forEach(g=>{ const o=g.options.find(o=>o.label===choice[g.group])||g.options[0]; del+=o.cents; });
+    const total=q.subtotal_cents+del;
+    $('#coTotals').innerHTML=`<div class="co-row"><span>Subtotal</span><span>${cents$(q.subtotal_cents)}</span></div>
+      <div class="co-row"><span>Delivery</span><span>${q.delivery.groups.length?cents$(del):(q.quote_required?'Quoted separately':cents$(0))}</span></div>
+      <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(total)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(Math.round(total/11))}</div>`; };
+  try{ cfg = await apiCall('/checkout?action=config'); }catch(e){ offline(); return; }
+  if(!cfg.providers || !cfg.providers.length){ offline(); return; }
+  try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
+  q.lines.forEach((l,i)=>{ const el=$$('#coLines .co-price')[i]; if(el) el.textContent=cents$(l.line_cents); });
+  $('#coDelivery').innerHTML = (q.delivery.groups.map(g=>`<fieldset class="co-radios"><legend>${esc(g.label)}</legend>${g.options.map((o,i)=>`<label><input type="radio" name="del-${esc(g.group)}" value="${esc(o.label)}" data-group="${esc(g.group)}" ${i===0?'checked':''}><span>${esc(o.label)}</span><b>${cents$(o.cents)}</b></label>`).join('')}${g.courier&&(g.note||SHIP_NOTE)?`<p class="co-muted co-small">${esc(g.note||SHIP_NOTE)}</p>`:''}</fieldset>`).join('')
+    + (q.quote_required?`<p class="co-note">Some items are delivered by courier at a quoted rate. We'll contact you to confirm delivery before dispatch; it isn't included in today's total.</p>`:'')) || '<p class="co-muted">No delivery charge.</p>';
+  q.delivery.groups.forEach(g=>{ choice[g.group]=g.options[0].label; });
+  $('#coDelivery').onchange=e=>{ const r=e.target.closest('input[type=radio]'); if(r){ choice[r.dataset.group]=r.value; totals(); } };
+  totals();
+  $('#coPay').innerHTML = `<fieldset class="co-radios">${cfg.providers.map((p,i)=>`<label><input type="radio" name="provider" value="${p.id}" ${i===0?'checked':''}><span>${esc(p.label)}</span>${p.test?'<b class="co-test">TEST MODE</b>':''}</label>`).join('')}</fieldset>`;
+  $('#coSubmit').disabled=false;
+  $('#coForm').onsubmit=async e=>{ e.preventDefault();
+    const f=$('#coForm'), bad=[...f.querySelectorAll('[required]')].find(x=>!x.value.trim()) || (!/^\d{4}$/.test($('#coPostcode').value.trim())?$('#coPostcode'):null) || (!$('#coEmail').checkValidity()?$('#coEmail'):null);
+    if(bad){ bad.focus(); note(`Please check ${esc((bad.labels[0]||{}).textContent||'this field').replace(/optional/,'').trim().toLowerCase()}.`, true); return; }
+    const btn=$('#coSubmit'); btn.disabled=true; btn.textContent='Preparing secure payment…';
+    try{
+      const lines=cartForServer();
+      await uploadArtwork(lines);
+      const r = await apiCall('/checkout?action=create', { provider:f.querySelector('input[name=provider]:checked').value, lines, delivery:choice,
+        customer:{ email:$('#coEmail').value, name:$('#coName').value, phone:$('#coPhone').value, company:$('#coCompany').value,
+          address:{ line1:$('#coLine1').value, line2:$('#coLine2').value, suburb:$('#coSuburb').value, state:$('#coState').value, postcode:$('#coPostcode').value } },
+        note:$('#coNote').value, marketing_opt_in:$('#coOptin').checked, campaign_id:campaignRef() });
+      location.href = r.redirect_url;
+    }catch(err){ note(esc(err.message), true); btn.disabled=false; btn.textContent='Pay securely'; }
+  };
+}
+
+// Customer artwork goes straight to the private "artwork" store (upload-only for the public).
+async function uploadArtwork(lines){
+  const c=window.GYA_CMS_CONFIG||{}, base=c.supabaseUrl, key=c.anonKey;
+  for(let i=0;i<cart.lines.length;i++){
+    const l=cart.lines[i], files=cartFiles.get(l.key), out=lines[i].art;
+    if(!out||!out.files||!out.files.length) continue;
+    if(!files||!base||!key||window.GYA_DEMO){ out.later=true; out.files=out.files.map(f=>({...f, path:null})); continue; }
+    const folder=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2));
+    for(let j=0;j<out.files.length;j++){ const file=files[j]; if(!file) continue;
+      const path=`incoming/${folder}/${(out.files[j].side||'artwork').replace(/\W+/g,'-')}-${file.name.replace(/[^\w.-]+/g,'-').slice(-120)}`;
+      const h={apikey:key, 'Content-Type':file.type||'application/octet-stream', 'x-upsert':'false'}; if(/^eyJ/.test(key)) h.Authorization='Bearer '+key;
+      const r=await fetch(`${base}/storage/v1/object/artwork/${path}`, {method:'POST', headers:h, body:file});
+      if(!r.ok) throw new Error(`We couldn't upload ${file.name}. Please try again, or tick "supply artwork later" for that item.`);
+      out.files[j].path=path; }
+  }
+}
+
+const ORDER_STEPS=[['paid','Order received'],['in_production','In production'],['dispatched','Dispatched'],['delivered','Delivered']];
+function pageOrder(){ return `<div class="page-head"><div class="wrap"><span class="eyebrow">Your order</span><h1 id="ordTitle">Checking your order…</h1><p id="ordSub"></p></div></div><div class="wrap ord-wrap" id="ordBody"></div>`; }
+async function wireOrder(id, params){
+  const t=params.get('t'), started=Date.now();
+  const draw=o=>{
+    const pending=o.status==='pending_payment', done=['paid','in_production','dispatched','delivered'];
+    $('#ordTitle').textContent = pending ? (params.get('paid')?'Confirming your payment…':'Awaiting payment') : o.status==='cancelled' ? `Order ${o.number} was cancelled` : o.status==='refunded' ? `Order ${o.number} was refunded` : `Thank you. Order ${o.number} is confirmed.`;
+    $('#ordSub').textContent = pending ? (params.get('paid')?'This usually takes a few seconds. You can keep this page open.':'We haven\'t received payment for this order yet.') : done.includes(o.status) ? `A confirmation has been sent to ${o.email}.` : '';
+    const at=ORDER_STEPS.findIndex(s=>s[0]===o.status);
+    $('#ordBody').innerHTML = `${done.includes(o.status)?`<ol class="ord-steps">${ORDER_STEPS.map((s,i)=>`<li class="${i<=at?'on':''}"><span>${i+1}</span>${s[1]}</li>`).join('')}</ol>`:''}
+      ${o.tracking_url||o.tracking_number?`<div class="co-note">Sent with ${esc(o.carrier||'our courier')}${o.tracking_number?`, tracking number <b>${esc(o.tracking_number)}</b>`:''}. ${o.tracking_url?`<a href="${esc(o.tracking_url)}" target="_blank" rel="noopener">Track your delivery</a>`:''}</div>`:''}
+      <div class="co-summary ord-sum"><h3>Order ${esc(o.number)}</h3>${o.items.map(i=>`<div class="co-row"><span><b>${esc(i.name)}</b> × ${i.qty}${Object.keys(i.options||{}).length?`<br><small class="co-muted">${Object.values(i.options).map(esc).join(' · ')}</small>`:''}${i.artwork_later?'<br><small class="co-muted">Artwork to follow</small>':''}</span><span>${cents$(i.line_cents)}</span></div>`).join('')}
+      <div class="co-row"><span>Delivery${o.delivery_method?`<br><small class="co-muted">${esc(o.delivery_method)}</small>`:''}</span><span>${cents$(o.delivery_cents)}</span></div>
+      <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(o.total_cents)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(o.gst_cents)}</div>
+      ${o.delivery_quote_required?'<p class="co-muted co-small">Courier delivery for some items will be quoted separately before dispatch.</p>':''}</div>
+      <p style="margin-top:24px"><a class="btn btn-line" href="#/shop">Keep shopping</a> <a class="btn btn-line" href="#/contact">Questions? Contact us</a></p>`;
+    if(done.includes(o.status) && cart.lines.length) clearCart();
+  };
+  const tick=async()=>{ if(!location.hash.startsWith('#/order/')) return;
+    try{ const o=await apiCall(`/checkout?action=status&id=${encodeURIComponent(id)}&t=${encodeURIComponent(t||'')}`); draw(o);
+      if(o.status==='pending_payment' && params.get('paid') && Date.now()-started<60000) setTimeout(tick, 2500);
+      else if(o.status==='pending_payment' && params.get('paid')) $('#ordSub').textContent='Your payment is still being confirmed. We\'ll email you as soon as it is, so there\'s no need to pay again.';
+    }catch(e){ $('#ordTitle').textContent='We couldn\'t find that order'; $('#ordSub').textContent='Check the link in your confirmation email, or contact us and we\'ll help.'; } };
+  tick();
+}
+
 function route(){
   closeAll(); clearInterval(window.__heroTimer);
   const raw = location.hash.replace(/^#\/?/,'');
@@ -3421,6 +4303,8 @@ function route(){
   else if(seg[0]==='blog'){ html=pageBlog(params.get('page')); title='Blog'+(+params.get('page')>1?' (page '+(+params.get('page'))+')':'')+' | Avanti Print & Design'; }
   else if(seg[0]==='login'||seg[0]==='admin'){ html=GYA.page(seg); after=()=>GYA.after(seg); }
   else if(seg[0]==='page'){ html=pageStatic(seg[1]); }
+  else if(seg[0]==='checkout'){ html=pageCheckout(params); after=()=>wireCheckout(params); title='Checkout | Avanti Print & Design'; }
+  else if(seg[0]==='order'&&seg[1]){ html=pageOrder(); after=()=>wireOrder(seg[1], params); title='Your order | Avanti Print & Design'; }
   else html=page404();
   main.innerHTML = `<div class="fade">${html}</div>`;
   // run inline data scripts (innerHTML doesn't execute them)
@@ -3432,7 +4316,7 @@ function route(){
   if(after) after();
 }
 window.addEventListener('hashchange', route);
-GYA.applyCache(); buildMenus(); renderCart(); route(); GYA.boot();
+GYA.applyCache(); restoreCart(); noteCampaign(); buildMenus(); renderCart(); route(); GYA.boot();
 </script>
 </body>
 </html>

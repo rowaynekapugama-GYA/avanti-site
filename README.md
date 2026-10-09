@@ -1,5 +1,22 @@
 # Avanti Print & Design, new storefront (v1)
 
+## Changelog: checkout, orders and email marketing (October 2026)
+
+- **Checkout:** cart now kept between visits; new checkout page with delivery choices, GST, a
+  marketing opt-in, and payment by Stripe (card, Apple Pay, Google Pay) or PayPal. Artwork files
+  upload to the private artwork store. Prices are always recalculated on the server.
+- **Orders** in the dashboard: dashboard cards, order list with filters and search, order detail
+  with items, artwork downloads, payment reference and a timeline of who changed what. Dispatch
+  takes a carrier and tracking number. Customers are emailed on paid, in production, dispatched,
+  cancelled and refunded.
+- **Marketing:** customers with recorded consent, CSV import, segments, email campaigns with
+  preview, test send, scheduling, results and duplicate, four automations (welcome, abandoned
+  checkout, reorder reminder, win-back), and an email log. One-click unsubscribe and a preferences
+  page (Spam Act).
+- Until Supabase and the payment keys are set up, customers see "online payment isn't available
+  yet, call us", and the dashboard demo shows sample orders and campaigns.
+- Setup steps: `docs/GO-LIVE.md`.
+
 ## Changelog: photos compressed (this round)
 
 - All photos re-encoded at quality 82 and capped at 1400px on the longest side (the product

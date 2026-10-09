@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/api/webhooks/:provider", "destination": "/api/webhooks?provider=:provider" }
+  ],
+  "crons": [
+    { "path": "/api/cron", "schedule": "0 20 * * *" }
+  ],
+  "headers": [
+    { "source": "/api/(.*)", "headers": [ { "key": "X-Robots-Tag", "value": "noindex" } ] }
+  ]
+}

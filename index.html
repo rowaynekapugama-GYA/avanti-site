@@ -7,15 +7,15 @@
      The anon key is public by design; the service role key must NEVER go here.
      Leave them blank and the site runs on the data built into this file. -->
 <script>window.GYA_CMS_CONFIG = window.GYA_CMS_CONFIG || {
-  supabaseUrl: '',          // e.g. https://abcdefghijkl.supabase.co
-  anonKey: '',              // the "anon public" key
+  supabaseUrl: 'https://jvtwwqnghrituggxdzzg.supabase.co',
+  anonKey: 'sb_publishable_Tl3AsSVaVKFcH1RfWJ6TVg_QExC97Wo',   // publishable key: public by design
   site: 'avanti',
   brand: 'Avanti Print & Design',
   // DEMO: lets people try the dashboard before Supabase is set up. Edits are saved in the
   // viewer's own browser only and nobody else sees them. Anyone who reads this file can see
   // this login, which is fine for a demo but means demo must be set to false before go-live.
   // Filling in supabaseUrl above switches the demo off automatically.
-  demo: true,
+  demo: false,
   demoUser: 'teamGYA',
   demoPassword: 'avantisite2026'
 };</script>
@@ -4083,7 +4083,7 @@ function wireProduct(){
     if(missing){ toast(`Choose a ${missing.toLowerCase()} first`); const ms=$(`[data-opt="${missing}"]`); (ms.hidden? ms.closest('.opt').querySelector('.sw') : ms).focus(); return; }
     for(const el of $$('[data-field]')){ const k=el.dataset.field, v=(el.dataset.value!==undefined? el.dataset.value : el.value.trim());
       if(el.dataset.req && !v){ toast(`${el.tagName==='SELECT'?'Choose':'Enter'} ${k.toLowerCase()} first`); el.focus(); return; }
-      if(v) opts[k]=v; }
+      if(v) opts[k]=(el.type==='date' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v.split('-').reverse().join('/') : v; }
     if(varPrice(p, opts)===undefined){ toast('That combination is not available, please choose another'); return; }
     let art=null;
     if(studio){ art=studio.collect();

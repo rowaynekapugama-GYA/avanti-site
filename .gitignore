@@ -4,3 +4,4 @@ index.live.html
 node_modules/
 .vercel
 .DS_Store
+supabase-setup/

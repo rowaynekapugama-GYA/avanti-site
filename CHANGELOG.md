@@ -1,5 +1,17 @@
 # Changelog
 
+## 21 October 2026: new main photo for the Corflute Insertable A-Frame
+
+- New main photo supplied by Avanti (single "Pedestrians" A-frame, square). Saved as
+  `assets/products/corflute-insertable-a-frame-main.jpg`, 1400 x 1400, 230 KB, metadata removed.
+  Because it's square it now shows in full on the product cards, with no trimming.
+- Gallery is now: the new main photo, then the group of three A-frames. Alt text unchanged.
+- `corflute-insertable-a-frame-1.jpg` is no longer shown but is kept in the repo, so the
+  19 October database patch can still be re-run safely.
+- Database: run `scripts/patches/2026-10-21-a-frame-main-photo.sql` in Supabase after deploying.
+  It only changes the A-frame's first photo and should return one row saying OK.
+- Files changed: `index.html`, `scripts/seed-data.json`, `CHANGELOG.md`, plus the new photo and patch.
+
 ## 19 October 2026: client revisions (Joey, "Website Updates")
 
 Five changes requested by Joey at Avanti, plus the dashboard auto sign-out from 15 October

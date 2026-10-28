@@ -1,7 +1,7 @@
 # Order emails, order status and analytics: release notes
 
 Built 28 October 2026 on branch `feature/order-emails-admin-analytics`.
-Safety tag of the live site before this work: `pre-order-system-2026-10-28`.
+Safety copy of the live site before this work: branch `safety/pre-order-system-2026-10-28` (commit 41e1051).
 
 ## What it does
 
@@ -122,8 +122,8 @@ If anything goes wrong after going live:
    redeploy. Orders and payments keep working.
 2. **Website:** Vercel > Deployments > the deployment before this one > "..." > Instant Rollback.
    Takes seconds.
-3. **Code:** `git revert -m 1 <merge commit>` on main and push, or reset main to the tag
-   `pre-order-system-2026-10-28`.
+3. **Code:** `git revert -m 1 <merge commit>` on main and push, or reset main to the branch
+   `safety/pre-order-system-2026-10-28` (commit 41e1051).
 4. **Database:** nothing needs undoing. The old site works with migration 004 in place (the new
    function and index are simply unused). If you want the old "tracking number required" rule
    back, re-run the `order_transition` part of `scripts/migrations/002-orders.sql`.

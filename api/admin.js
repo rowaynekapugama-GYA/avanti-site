@@ -72,7 +72,8 @@ export const POST = handle(async (req) => {
         if (!o) throw new HttpError(404, 'Order not found.');
         if (!(await orderEmailsOn(d, cfg))) throw new HttpError(409, 'Order emails are switched off. Switch them on in Email log first.');
         const r = await sendCustomerNote(d, o, text, cfg);
-        await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `Note emailed to the customer: ${text}`, data: { to_customer: true } });
+        const how = r.status === 'failed' ? `Note could not be emailed to the customer (${String(r.error || 'error').slice(0, 200)})` : r.status === 'logged' ? 'Note for the customer (recorded only: the email service is not connected)' : 'Note emailed to the customer';
+        await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `${how}: ${text}`, data: { to_customer: true, email_status: r.status } });
         return json({ ok: true, status: r.status, to: r.to_email });
       }
       const o = await d.one('orders', `select=id,status&id=eq.${d.q(need(b.order_id, 'Missing order.'))}`);

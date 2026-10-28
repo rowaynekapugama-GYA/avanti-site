@@ -149,5 +149,9 @@ If anything goes wrong after going live:
 | Cancelled, Refunded | Customer, copy to Avanti | Staff cancel, or a full refund in Stripe or PayPal |
 | Note to customer | Customer, copy to Avanti | Staff add a note with "Email this note to the customer" ticked |
 
-Copies can be turned off in Email log. They go as a hidden copy (Bcc), so the customer never
-sees Avanti's address in the recipients.
+Copies are separate emails marked "[Copy]" (replying goes to the customer) and can be turned off
+in Email log. The new-order email also carries the customer's artwork: attached when up to 6 files
+total 12 MB or less, and always as 30-day download links.
+
+Before deploying this update, every category needs a delivery price (Dashboard > Shipping):
+items without one can no longer be paid for online with $0 delivery.

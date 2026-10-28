@@ -41,7 +41,8 @@ export function config() {
       // When set, every outgoing email goes only to this address (for testing a preview safely).
       testRecipient: E('EMAIL_TEST_RECIPIENT').trim().toLowerCase(),
       // Who gets the "new order received" email. Set to 'off' for none.
-      adminNotify: E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au').trim().toLowerCase(),
+      // one address (if a list is entered, the first valid address is used); 'off' turns staff emails off
+      adminNotify: (s => s === 'off' ? 'off' : (s.split(/[\s,;]+/).find(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)) || ''))(E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au').trim().toLowerCase()),
     },
     timezone: E('BUSINESS_TIMEZONE', 'Australia/Sydney').trim() || 'Australia/Sydney',
     business: {   // shown in every email footer (the Spam Act requires sender identification)
@@ -133,7 +134,7 @@ export async function storageSign(cfg, bucket, path, seconds) {
   const headers = { apikey: cfg.serviceKey, 'Content-Type': 'application/json' };
   if (isJwt(cfg.serviceKey)) headers.Authorization = `Bearer ${cfg.serviceKey}`;
   const r = await fetch(`${cfg.supabaseUrl}/storage/v1/object/sign/${bucket}/${String(path).split('/').map(encodeURIComponent).join('/')}`,
-    { method: 'POST', headers, body: JSON.stringify({ expiresIn: seconds }), signal: AbortSignal.timeout(5000) });
+    { method: 'POST', headers, body: JSON.stringify({ expiresIn: seconds }), signal: AbortSignal.timeout(4000) });
   const data = await r.json().catch(() => ({}));
   const rel = data.signedURL || data.signedUrl;
   if (!r.ok || !rel) throw new Error(data.message || `Storage error ${r.status}`);

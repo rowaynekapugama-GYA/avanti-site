@@ -16,7 +16,8 @@ export async function orderEmailsOn(d, cfg = config()) {
 }
 
 // "Send Avanti a copy of every customer email" (on unless switched off in the dashboard), like
-// WooCommerce, where the shop hears about every order change. The copy goes as a hidden copy (Bcc).
+// WooCommerce, where the shop hears about every order change. The copy is its own email, so a bounce
+// or spam report on Avanti's copy is never recorded against the customer.
 export async function flag(d, key, fallback = true) {
   try { const r = await d.one('app_flags', `select=value&key=eq.${d.q(key)}`); return r ? r.value !== false : fallback; }
   catch (e) { return fallback; }
@@ -40,25 +41,38 @@ export async function sendOrderEmail(d, o, status, { force = false, cfg = config
   if (!m) return { skipped: 'no email for this status' };
   const template = `order-${status}`;
   if (!force && await alreadySent(d, o.id, template)) return { skipped: 'already sent' };
-  return sendEmail(d, { kind: 'transactional', template, to: o.email, bcc: await copyTo(d, o, cfg), order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+  const r = await sendEmail(d, { kind: 'transactional', template, to: o.email, order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+  if (r.status !== 'failed') await sendCopy(d, o, template, m, cfg);
+  return r;
+}
+async function sendCopy(d, o, template, m, cfg) {
+  try {
+    const to = await copyTo(d, o, cfg);
+    if (!to) return;
+    await sendEmail(d, { kind: 'transactional', template: `copy-${template}`, to, order_id: o.id, replyTo: o.email,
+      subject: `[Copy] ${m.subject}`, html: m.html, text: `Copy of the email sent to ${o.email}. Replying goes to the customer.\n\n${m.text}` }, cfg);
+  } catch (err) { console.error('copy to Avanti failed', o.id, err); }
 }
 
 // A note typed by staff and sent to the customer. Every note is its own email (never deduplicated).
 export async function sendCustomerNote(d, o, note, cfg = config()) {
-  return sendEmail(d, { kind: 'transactional', template: 'order-note', to: o.email, bcc: await copyTo(d, o, cfg), order_id: o.id, customer_id: o.customer_id, ...customerNoteEmail(o, note, cfg) }, cfg);
+  const m = customerNoteEmail(o, note, cfg);
+  const r = await sendEmail(d, { kind: 'transactional', template: 'order-note', to: o.email, order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+  if (r.status !== 'failed') await sendCopy(d, o, 'order-note', m, cfg);
+  return r;
 }
 
 // The customer's uploaded artwork, with a 30-day download link for each file.
-const ATTACH_LIMIT = 12 * 1024 * 1024;   // attach when the files add up to 12 MB or less (inbox limits are ~25 MB)
+const ATTACH_LIMIT = 12 * 1024 * 1024, ATTACH_MAX = 6;   // attach up to 6 files totalling 12 MB (inbox limits are ~25 MB)
 async function artworkFiles(o, cfg) {
-  const out = [];
-  for (const i of o.items || []) for (const f of (i.artwork && i.artwork.files) || []) {
-    if (!f.path) continue;
+  const list = [];
+  for (const i of o.items || []) for (const f of (i.artwork && i.artwork.files) || []) if (f.path) list.push({ i, f });
+  // links are made in parallel so a big order never holds up the payment
+  return Promise.all(list.slice(0, 40).map(async ({ i, f }) => {
     let url = null;
     try { url = await storageSign(cfg, 'artwork', f.path, 30 * 86400); } catch (err) { console.error('artwork link failed', o.id, f.path, err.message); }
-    out.push({ item: i.name, side: f.side || 'Artwork', name: f.name || f.path.split('/').pop(), size: f.size || null, url });
-  }
-  return out;
+    return { item: i.name, side: f.side || 'Artwork', name: f.name || f.path.split('/').pop(), size: f.size || null, url };
+  }));
 }
 
 export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {}) {
@@ -68,16 +82,16 @@ export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {
   let files = [];
   try { files = await artworkFiles(o, cfg); } catch (err) { console.error('artwork files', o.id, err); }
   const total = files.reduce((t, f) => t + (f.size || 0), 0);
-  const canAttach = files.length > 0 && files.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
+  const canAttach = files.length > 0 && files.length <= ATTACH_MAX && files.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
   const base = { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email };
   if (canAttach) {
     const r = await sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, attached: true }),
       attachments: files.map(f => ({ filename: f.name, path: f.url })) }, cfg);
     if (r.status !== 'failed') return r;
     console.error('staff alert with attachments failed, sending links only', o.id, r.error);   // fall back to links
-    return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, noteTooBig: true }) }, cfg);
+    return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: 'failed' }) }, cfg);
   }
-  return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, noteTooBig: files.length > 0 && total > ATTACH_LIMIT }) }, cfg);
+  return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: files.length ? 'size' : '' }) }, cfg);
 }
 async function sendFailedAlert(d, o, cfg) {
   const to = cfg.email.adminNotify;

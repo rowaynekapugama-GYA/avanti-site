@@ -19,7 +19,7 @@ export async function sendEmail(d, msg, cfg = config()) {
   try {
     const r = await fetch(`${cfg.email.apiBase}/emails`, { method: 'POST',
       headers: { Authorization: `Bearer ${cfg.email.resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': log.id },
-      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(msg.attachments ? 15000 : 10000) });   // a hung email service never holds up an order
+      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(msg.attachments ? 12000 : 10000) });   // a hung email service never holds up an order
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.message || `Resend error ${r.status}`);
     await d.update('email_log', `id=eq.${log.id}`, { status: 'sent', provider_id: data.id });
@@ -182,13 +182,14 @@ export function orderEmail(kind, o, cfg = config()) {
 // Emails for the Avanti team: "New order" (kind 'new', with everything needed to start the job)
 // and "Payment failed" (kind 'failed': the customer's payment didn't go through).
 // files: the order's artwork as [{item, side, name, url}] (url = 30-day download link), shown on
-// the new-order email; attached = whether the files are also attached; noteTooBig = they couldn't be.
-export function staffOrderEmail(o, cfg = config(), kind = 'new', { files = [], attached = false, noteTooBig = false } = {}) {
+// the new-order email; attached = whether the files are also attached; notAttached = why not ('size' or 'failed').
+export function staffOrderEmail(o, cfg = config(), kind = 'new', { files = [], attached = false, notAttached = '' } = {}) {
+  const why = notAttached === 'size' ? 'The files are too large (or too many) to attach, so use the links. ' : notAttached === 'failed' ? "The files couldn't be attached this time, so use the links. " : '';
   const failed = kind === 'failed';
   const fileHtml = files.length ? p(`<b>Artwork${attached ? ' (attached)' : ''}</b>`) + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;font-size:14px">${files.map(f =>
       `<tr><td style="padding:6px 0;border-bottom:1px solid ${LINE}">${e(f.item)}<br><span style="color:${MUTED};font-size:13px">${e(f.side)}: ${e(f.name)}</span></td><td align="right" style="padding:6px 0;border-bottom:1px solid ${LINE}">${f.url ? `<a href="${e(f.url)}" style="color:${RED};font-weight:bold">Download</a>` : `<span style="color:${MUTED};font-size:13px">In the dashboard</span>`}</td></tr>`).join('')}</table>`
-      + p(`<span style="color:${MUTED};font-size:13px">${noteTooBig ? 'The files were too large to attach, so use the links. ' : ''}Download links work for 30 days. After that, download the files from the order in the dashboard.</span>`) : '';
-  const fileText = files.length ? `\nArtwork${attached ? ' (attached)' : ''}:\n${files.map(f => `- ${f.item}, ${f.side}: ${f.name}${f.url ? `\n  ${f.url}` : ' (download it from the dashboard)'}`).join('\n')}\n${noteTooBig ? 'The files were too large to attach, so use the links. ' : ''}Download links work for 30 days.\n` : '';
+      + p(`<span style="color:${MUTED};font-size:13px">${why}Download links work for 30 days. After that, download the files from the order in the dashboard.</span>`) : '';
+  const fileText = files.length ? `\nArtwork${attached ? ' (attached)' : ''}:\n${files.map(f => `- ${f.item}, ${f.side}: ${f.name}${f.url ? `\n  ${f.url}` : ' (download it from the dashboard)'}`).join('\n')}\n${why}Download links work for 30 days.\n` : '';
   const a = o.shipping_address || {};
   const admin = `${cfg.siteUrl}/#/admin/orders/${o.id}`;
   const provider = { stripe: 'Card (Stripe)', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '';

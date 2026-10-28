@@ -1,19 +1,35 @@
 # Changelog
 
-## 29 October 2026: WooCommerce-style order notifications
+## 29 October 2026: WooCommerce-style notifications, artwork and delivery safeguards
 
-So Avanti hears about every order change, the way WooCommerce worked:
+**Before deploying:** Avanti must set delivery prices (Dashboard > Shipping) for every category
+that doesn't have one, including Wallpaper (the $1 test product). After this update, items without
+a delivery price can't be paid for online.
 
-- **Copies to Avanti.** Every email sent to a customer (confirmation, processing, dispatched,
-  delivered, cancelled, refunded, notes) also goes to `ADMIN_NOTIFICATION_EMAIL`
-  (info@avantiprint.com.au) as a hidden copy. On by default; Email log > "Turn copies off".
-- **Payment failed alert.** If Stripe or PayPal says a payment failed, the Avanti team gets a
-  "Payment failed for order ..." email with the customer's details, once. The customer isn't
-  emailed, and staff or automatic tidy-ups of unfinished checkouts stay silent.
-- **Note to customer.** On the order page, tick "Email this note to the customer" when adding a
-  note and it's emailed to them (with a copy to Avanti) and shown on the timeline.
-- No database change. `EMAIL_TEST_RECIPIENT` never copies anyone else in.
-- Files: `api/_lib/effects.js`, `api/_lib/email.js`, `api/admin.js`, `index.html`, `tests/api.test.mjs` (3 new tests, 40 pass).
+Notifications (Avanti hears about every order change, the way WooCommerce worked):
+- **Copies to Avanti.** Every email sent to a customer also goes to `ADMIN_NOTIFICATION_EMAIL`
+  as a separate email marked "[Copy]" (replying goes to the customer). On by default;
+  Email log > "Turn copies off". Kept separate so a bounce on Avanti's copy never affects the customer.
+- **Payment failed alert** to Avanti when Stripe or PayPal reports a failed payment (once).
+- **Note to customer:** tick "Email this note to the customer" when adding a note.
+- **Artwork in the new-order email:** attached when there are up to 6 files totalling 12 MB or less,
+  and always with 30-day download links. Falls back to links if attaching fails.
+
+Artwork and delivery (from order AVP-1002):
+- Artwork uploads when the item is added to the cart, so a refresh before checkout can't lose it.
+- If chosen artwork never arrived, checkout (browser and server) won't take payment and asks the
+  customer to add it again, instead of quietly marking it "supply later".
+- "Supply artwork later" stays. Those customers' confirmation email asks them to reply with their files.
+- Items with no delivery price can't be paid with $0 delivery: the cart and checkout ask the
+  customer to call or email for a quote.
+- WebP images are no longer offered for artwork (the artwork store doesn't accept them).
+- `ADMIN_NOTIFICATION_EMAIL` uses the first valid address if a list is entered.
+
+No database change. Files: `api/_lib/effects.js`, `api/_lib/email.js`, `api/_lib/orders.js`,
+`api/_lib/core.js`, `api/admin.js`, `api/checkout.js`, `index.html`, `tests/`. Tests: 44 API tests,
+plus checkout, artwork, dashboard and demo browser tests and the 214-page storefront sweep.
+An independent review of the checkout changes found no way to take a wrong payment; its other
+findings are fixed.
 
 ## 28 October 2026: order emails, order status management and analytics
 

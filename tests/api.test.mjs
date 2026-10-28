@@ -168,7 +168,8 @@ test('Stripe: session created with the right amounts, then paid only by a signed
   assert.equal(mocks.state.emails.filter(m => m.to[0] === 'jo.buyer@example.com').length, 1);
   // a different event id for the same payment is also harmless
   await postStripe(stripeEvent(o));
-  assert.deepEqual((await logs(`order_id=eq.${o.order_id}`)).map(l => l.template), ['order-paid', 'order-new-staff']);
+  assert.deepEqual(noCopies(await logs(`order_id=eq.${o.order_id}`)).map(l => l.template), ['order-paid', 'order-new-staff']);
+  assert.equal(copyMail().length, 1);   // and one copy of the confirmation to Avanti, not repeated
 });
 
 test('Stripe: payments from the old website are ignored', async () => {
@@ -218,7 +219,7 @@ test('PayPal: captured on return, webhook repeats are harmless, refunds tracked'
   r = await call(webhooks.POST, '/api/webhooks?provider=paypal', { method: 'POST', body: ev, headers: hdr('valid-signature') });
   assert.equal(r.status, 200);
   assert.equal((await events(o.order_id)).filter(e => e.to_status === 'paid' && e.from_status !== 'paid').length, 1);
-  assert.equal(mocks.state.emails.filter(m => /Order confirmed/.test(m.subject)).length, 1);
+  assert.equal(mocks.state.emails.filter(m => /^Order confirmed/.test(m.subject)).length, 1);
   // refund
   const ref = { id: 'WH-EVT-2', event_type: 'PAYMENT.CAPTURE.REFUNDED', resource: { id: 'REF-1', amount: { value: (row.total_cents / 100).toFixed(2) }, links: [{ rel: 'up', href: `https://api/v2/payments/captures/CAP-${ppId}` }] } };
   await call(webhooks.POST, '/api/webhooks?provider=paypal', { method: 'POST', body: ref, headers: hdr('valid-signature') });
@@ -295,7 +296,7 @@ test('full order lifecycle with emails, tracking and an audit trail', async () =
   const disp = mocks.state.emails.find(m => /on its way/.test(m.subject));
   assert.match(disp.html, /auspost\.com\.au\/mypost\/track\/details\/AP1234567/); assert.match(disp.text, /AP1234567/);
   const log = await logs(`order_id=eq.${o.order_id}`);
-  assert.deepEqual(log.map(l => l.template), ['order-paid', 'order-new-staff', 'order-in_production', 'order-dispatched', 'order-delivered']);
+  assert.deepEqual(noCopies(log).map(l => l.template), ['order-paid', 'order-new-staff', 'order-in_production', 'order-dispatched', 'order-delivered']);
   assert.ok(log.every(l => l.status === 'sent' && l.provider_id));
 });
 
@@ -499,14 +500,17 @@ test('every email is logged, and without a Resend key nothing leaves the buildin
   process.env.RESEND_API_KEY = '';
   const o = await paidOrder();
   const l = await logs(`order_id=eq.${o.order_id}`);
-  assert.equal(l.length, 2); assert.ok(l.every(x => x.status === 'logged' && x.provider === 'log'));
+  process.env.RESEND_API_KEY = 're_test_key';
+  assert.equal(noCopies(l).length, 2); assert.equal(l.length, 3); assert.ok(l.every(x => x.status === 'logged' && x.provider === 'log'));
   assert.equal(mocks.state.emails.length, 0);
   process.env.RESEND_API_KEY = 're_test_key';
 });
 
 // ======================= PR 4: order emails, status management, analytics =======================
 const customerMail = () => mocks.state.emails.filter(m => m.to[0] === 'jo.buyer@example.com');
-const staffMail = () => mocks.state.emails.filter(m => m.to[0] === 'info@avantiprint.com.au');
+const staffMail = () => mocks.state.emails.filter(m => m.to[0] === 'info@avantiprint.com.au' && !/^\[Copy\]/.test(m.subject));
+const copyMail = () => mocks.state.emails.filter(m => m.to[0] === 'info@avantiprint.com.au' && /^\[Copy\]/.test(m.subject));
+const noCopies = l => l.filter(x => !String(x.template).startsWith('copy-'));
 
 test('a paid order emails the customer the full details and alerts the Avanti team, once each', async () => {
   await reset();
@@ -603,7 +607,7 @@ test('EMAIL_TEST_RECIPIENT sends everything to the test address only', async () 
   process.env.EMAIL_TEST_RECIPIENT = 'tester@gya.test';
   const o = await paidOrder();
   delete process.env.EMAIL_TEST_RECIPIENT;
-  assert.equal(mocks.state.emails.length, 2);
+  assert.equal(mocks.state.emails.length, 3);   // confirmation, Avanti's copy, new-order alert
   assert.ok(mocks.state.emails.every(m => m.to[0] === 'tester@gya.test'));
   assert.ok(mocks.state.emails.some(m => /^\[TEST for jo\.buyer@example\.com\] Order confirmed/.test(m.subject)));
   assert.ok(mocks.state.emails.some(m => /^\[TEST for info@avantiprint\.com\.au\] New order/.test(m.subject)));
@@ -717,21 +721,26 @@ test('Avanti gets a copy of every customer email, unless copies are turned off',
   await reset();
   const o = await paidOrder();
   const conf = customerMail()[0];
-  assert.deepEqual(conf.bcc, ['info@avantiprint.com.au']);                     // hidden copy to Avanti
-  assert.equal(staffMail()[0].bcc, undefined);                                 // the staff alert itself isn't copied
+  assert.equal(conf.bcc, undefined);                                           // the customer's email has no one else on it
+  let copy = copyMail().at(-1);                                                  // Avanti's copy is a separate email
+  assert.equal(copy.subject, `[Copy] ${conf.subject}`); assert.equal(copy.reply_to, 'jo.buyer@example.com');
+  assert.match(copy.text, /^Copy of the email sent to jo\.buyer@example\.com/);
+  assert.equal(copyMail().length, 1);                                            // the staff alert itself isn't copied
+  assert.deepEqual(noCopies(await logs(`order_id=eq.${o.order_id}`)).length, 2);
   await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production' });
-  assert.deepEqual(customerMail().at(-1).bcc, ['info@avantiprint.com.au']);
+  assert.equal(copyMail().length, 2); assert.match(copyMail().at(-1).subject, /^\[Copy\] Your order .* is being processed/);
   let r = await act(adminToken, 'email-settings', { order_email_copies: false });
   assert.equal(r.status, 200); assert.equal(r.data.copies, false);
   await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched', carrier: 'Sendle' });
-  assert.equal(customerMail().at(-1).bcc, undefined);
+  assert.match(customerMail().at(-1).subject, /on its way/); assert.equal(copyMail().length, 2);   // no copy while off
   r = await act(adminToken, 'email-settings', { order_email_copies: true });
   assert.equal(r.data.copies, true);
   // test mode never copies anyone else in
   process.env.EMAIL_TEST_RECIPIENT = 'tester@gya.test';
   await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'delivered' });
   delete process.env.EMAIL_TEST_RECIPIENT;
-  assert.equal(mocks.state.emails.at(-1).to[0], 'tester@gya.test'); assert.equal(mocks.state.emails.at(-1).bcc, undefined);
+  assert.ok(mocks.state.emails.slice(-2).every(m => m.to[0] === 'tester@gya.test'));
+  assert.match(mocks.state.emails.at(-1).subject, /^\[TEST for info@avantiprint\.com\.au\] \[Copy\]/);
 });
 
 test('a failed payment alerts the Avanti team once; tidy-up cancellations stay silent', async () => {
@@ -760,7 +769,7 @@ test('notes can be emailed to the customer; internal notes are not', async () =>
   assert.equal(r.status, 200); assert.equal(r.data.status, 'sent'); assert.equal(r.data.to, 'jo.buyer@example.com');
   const m = customerMail().filter(x => /A note about your order AVP-/.test(x.subject));
   assert.equal(m.length, 1); assert.match(m[0].text, /your banners ship Tuesday/); assert.match(m[0].html, /Hi Jo,<br>your banners ship Tuesday/);
-  assert.deepEqual(m[0].bcc, ['info@avantiprint.com.au']);
+  assert.ok(copyMail().some(c => /^\[Copy\] A note about your order/.test(c.subject)));
   assert.ok((await events(o.order_id)).some(e => /^Note emailed to the customer: Hi Jo/.test(e.note || '')));
   assert.ok((await logs(`order_id=eq.${o.order_id}&template=eq.order-note`)).length === 1);
   // a second note is a new email, not a duplicate
@@ -826,7 +835,7 @@ test('the new-order email carries the artwork: attached when small, always with 
   const p2 = await upload('huge.pdf', 10);
   await order([{ side: 'Artwork', name: 'huge.pdf', path: p2, size: 20 * 1024 * 1024 }]);
   s = staffMail().at(-1);
-  assert.equal(s.attachments, undefined); assert.match(s.text, /too large to attach/); assert.match(s.html, />Download</);
+  assert.equal(s.attachments, undefined); assert.match(s.text, /too large \(or too many\) to attach/); assert.match(s.html, />Download</);
   // the email service refuses the attachment: the team still gets the order, with links
   mocks.state.failAttachments = true;
   const p3 = await upload('logo2.pdf', 1500);
@@ -840,4 +849,27 @@ test('the new-order email carries the artwork: attached when small, always with 
   await order(undefined);
   assert.doesNotMatch(staffMail().at(-1).text, /Artwork/);
   assert.equal((await d.one('orders', `select=status&id=eq.${a.order_id}`)).status, 'paid');
+});
+
+test('second review: one staff address from a list, honest note wording, attachment cap', async () => {
+  await reset();
+  process.env.ADMIN_NOTIFICATION_EMAIL = 'Orders@Avantiprint.com.au, jo@avantiprint.com.au';
+  const o = await paidOrder();
+  delete process.env.ADMIN_NOTIFICATION_EMAIL;
+  const staff = mocks.state.emails.filter(m => /^New order/.test(m.subject));
+  assert.equal(staff.length, 1); assert.deepEqual(staff[0].to, ['orders@avantiprint.com.au']);
+  assert.equal(customerMail().length, 1);                                       // the customer's email is unaffected
+  // without the email service, the timeline doesn't claim the note was emailed
+  process.env.RESEND_API_KEY = '';
+  await act(adminToken, 'order-note', { order_id: o.order_id, note: 'Proof attached', to_customer: true });
+  process.env.RESEND_API_KEY = 're_test_key';
+  assert.ok((await events(o.order_id)).some(e => /^Note for the customer \(recorded only/.test(e.note || '')));
+  // more than 6 files: links only
+  await rateFor('mailer-boxes');
+  const files = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(async n => ({ side: 'Artwork', name: `f${n}.pdf`, path: await upload(`f${n}.pdf`, 100), size: 100 })));
+  const b = await newOrder('stripe', { lines: [{ ...MAILER, art: { files: files.slice(0, 4) } }, { ...MAILER, qty: 200, art: { files: files.slice(4) } }], delivery: { 'test-packaging': 'Metro' } });
+  await postStripe(stripeEvent(b));
+  const s = staffMail().at(-1);
+  assert.equal(s.attachments, undefined); assert.equal((s.html.match(/>Download</g) || []).length, 8);
+  assert.match(s.text, /too large \(or too many\) to attach/);
 });

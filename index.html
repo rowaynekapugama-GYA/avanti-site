@@ -3108,7 +3108,7 @@ const GYA = (() => {
   const MAIL = { 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
     'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team',
     'order-note': 'Note to the customer', 'order-failed-staff': 'Payment-failed alert to the Avanti team' };
-  const mailName = t => MAIL[t] || String(t || '').replace('order-', '').replace('_', ' ');
+  const mailName = t => String(t || '').startsWith('copy-') ? `Copy to Avanti: ${mailName(String(t).slice(5))}` : MAIL[t] || String(t || '').replace('order-', '').replace('_', ' ');
   async function orderDetail(main, id) {
     const [o] = await rest(`orders?select=*&id=eq.${enc(id)}`);
     if (!o) { main.innerHTML = head('Order not found') + '<p><a class="gya-link" href="#/admin/orders">Back to orders</a></p>'; return; }
@@ -3122,7 +3122,7 @@ const GYA = (() => {
     // status changes, notes and emails in one timeline, oldest first
     const timeline = events.map(e => ({ at: e.created_at, html: `<li><b>${e.from_status && e.from_status !== e.to_status ? `${ST[e.from_status] ? ST[e.from_status][0] : e.from_status} → ${ST[e.to_status] ? ST[e.to_status][0] : e.to_status}` : e.from_status === e.to_status ? 'Note' : ST[e.to_status] ? ST[e.to_status][0] : e.to_status}</b>
         <span class="gya-muted">${dtt(e.created_at)} · ${who(e.actor)}</span>${e.note ? `<p>${esc(e.note)}</p>` : ''}${e.data && e.data.carrier && e.to_status === 'dispatched' ? `<p>${esc(e.data.carrier)}${e.data.tracking_number ? ` · ${esc(e.data.tracking_number)}` : ' · no tracking number'}</p>` : ''}</li>` }))
-      .concat(mails.map(m => ({ at: m.created_at, html: `<li class="gya-tl-mail"><b>Email: ${esc(mailName(m.template))} ${mailPill(m)}</b><span class="gya-muted">${dtt(m.created_at)} · to ${esc(m.to_email || '')}</span>${m.error || m.bounce_reason ? `<p class="gya-warn-t">${esc(m.error || m.bounce_reason)}</p>` : ''}</li>` })))
+      .concat(mails.filter(m => !String(m.template || '').startsWith('copy-')).map(m => ({ at: m.created_at, html: `<li class="gya-tl-mail"><b>Email: ${esc(mailName(m.template))} ${mailPill(m)}</b><span class="gya-muted">${dtt(m.created_at)} · to ${esc(m.to_email || '')}</span>${m.error || m.bounce_reason ? `<p class="gya-warn-t">${esc(m.error || m.bounce_reason)}</p>` : ''}</li>` })))
       .sort((x, y) => new Date(x.at) - new Date(y.at)).map(x => x.html).join('');
     const canResend = !!o.paid_at;   // never email someone whose checkout was not paid
     main.innerHTML = head(`${esc(o.number)} ${pill(o.status)}`, `Placed ${dtt(o.created_at)} · <a class="gya-link" href="#/admin/orders">Back to orders</a>`,
@@ -3583,23 +3583,23 @@ const GYA = (() => {
     qs('#lfKind', main).value = lf.kind; qs('#lfStatus', main).value = lf.status; qs('#lfQ', main).value = lf.q;
     // order email switch and sending status (the page still works if this can't be loaded)
     const settings = async (change) => { const box = qs('#lfSettings', main); if (!box) return;
-      let st; try { st = await server('email-settings', change || {}); } catch (e) { if (change) toast(e.message, true); return; }
+      let st; try { st = await server('email-settings', change || {}); } catch (e) { if (change) toast(e.message, true); return false; }
       const on = st.order_emails_env && st.order_emails_switch;
       box.innerHTML = `<section class="gya-card"><div class="gya-cardhead"><h3>Order emails ${pill(on ? 'subscribed' : 'unsubscribed', on ? 'On' : 'Off')}</h3>
           ${st.order_emails_env ? `<button class="gya-btn ${st.order_emails_switch ? 'gya-btn-line' : 'gya-btn-red'} gya-btn-sm" id="lfSwitch">${st.order_emails_switch ? 'Switch off' : 'Switch on'}</button>` : ''}</div>
         <p class="gya-small" style="margin:0">${on ? `Customers get an email when their order is confirmed, processing, dispatched, delivered, cancelled or refunded.${st.staff_email ? ` New orders and failed payments are also sent to <b>${esc(st.staff_email)}</b>.` : ''}`
           : st.order_emails_env ? 'Switched off here: no order emails go to customers or staff until you switch them back on. Orders and payments carry on as normal.'
           : 'Switched off in Vercel (ORDER_EMAILS_ENABLED=false). Change it there to turn order emails back on.'}</p>
-        ${st.staff_email && on ? `<div class="gya-row" style="margin-top:10px;justify-content:space-between"><span class="gya-small">${st.copies ? `<b>Copies on:</b> ${esc(st.staff_email)} also gets a copy of every email sent to a customer (confirmation, status updates, cancellations, refunds, notes).` : `<b>Copies off:</b> ${esc(st.staff_email)} only gets new-order and payment-failed alerts.`}</span>
+        ${st.staff_email && on ? `<div class="gya-row" style="margin-top:10px;justify-content:space-between"><span class="gya-small">${st.copies ? `<b>Copies on:</b> ${esc(st.staff_email)} also gets a copy of every email sent to a customer (confirmation, status updates, cancellations, refunds, notes), marked [Copy].` : `<b>Copies off:</b> ${esc(st.staff_email)} only gets new-order and payment-failed alerts.`}</span>
           <button class="gya-btn gya-btn-line gya-btn-sm" id="lfCopies">${st.copies ? 'Turn copies off' : 'Turn copies on'}</button></div>` : ''}
         ${!st.sending ? '<p class="gya-warn" style="margin:10px 0 0">The email service (Resend) is not connected yet, so emails are recorded below as “Logged only” but not delivered.</p>' : ''}
         ${st.test_recipient ? `<p class="gya-warn" style="margin:10px 0 0">Test mode: every email goes to <b>${esc(st.test_recipient)}</b> only (EMAIL_TEST_RECIPIENT).</p>` : ''}</section>`;
       const cp = qs('#lfCopies', box);
-      if (cp) cp.onclick = () => busy(cp, async () => { await settings({ order_email_copies: !st.copies }); toast(st.copies ? 'Copies turned off' : 'Copies turned on'); });
+      if (cp) cp.onclick = () => busy(cp, async () => { if (await settings({ order_email_copies: !st.copies }) !== false) toast(st.copies ? 'Copies turned off' : 'Copies turned on'); });
       const b = qs('#lfSwitch', box);
       if (b) b.onclick = () => { const next = !st.order_emails_switch;
         if (!confirm(next ? 'Switch order emails back on?' : 'Switch off all order emails? Customers will not be told about new orders or status changes until you switch them back on.')) return;
-        busy(b, async () => { await settings({ order_emails: next }); toast(next ? 'Order emails are on' : 'Order emails are off'); }); };
+        busy(b, async () => { if (await settings({ order_emails: next }) !== false) toast(next ? 'Order emails are on' : 'Order emails are off'); }); };
     };
     settings();
     let offset = 0, rows = [];
@@ -3918,7 +3918,7 @@ function renderCart(){
         const courier=cls.some(c=>SHIPPING[c].courier);
         const opts={}; cls.forEach(c=>SHIPPING[c].options.forEach(([n,v])=>{ opts[n]=(opts[n]||0)+v; }));
         return Object.entries(opts).map(([n,v])=>`<div class="row"><span>${n}</span><span>${money(v)}</span></div>`).join('')
-          + (cart.lines.some(l=>!SHIPPING[prod(l.slug).c])?`<div class="row"><span>Other items</span><span>Quoted at checkout</span></div>`:'')
+          + (cart.lines.some(l=>!SHIPPING[prod(l.slug).c])?`<div class="row"><span>Other items</span><span>Delivery quote needed</span></div><p class="hint" style="text-align:left;margin:2px 0 6px">Delivery for some items needs a quote before you can pay online. Call <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email us</a>.</p>`:'')
           + (courier?`<p class="hint" style="text-align:left;margin:2px 0 6px">${SHIP_NOTE}</p>`:''); })()}
       <div class="row total"><span>Total</span><span>${money(cartTotal())}</span></div>
       <button class="btn btn-red btn-block btn-lg" id="checkoutBtn">Checkout</button>
@@ -4298,7 +4298,7 @@ function artStudioHTML(p){
           <b>Click to upload</b> or drag &amp; drop
           <p>Your file stays on this device until you order.</p>
           <span class="mono">JPG · PNG · WebP · PDF, max 32 MB</span>
-          <input type="file" id="artFile" accept="image/jpeg,image/png,image/webp,application/pdf" hidden>
+          <input type="file" id="artFile" accept="image/jpeg,image/png,application/pdf" hidden>
         </div>
         <div id="artMeta"></div>
         <div class="art-ctl" id="artCtl" style="display:none">
@@ -4360,8 +4360,8 @@ function artStudio(p){
   function accept(file){
     if(!file) return;
     if(file.size>32*1024*1024){ toast('That file is over the 32 MB limit'); return; }
-    const okTypes=['image/jpeg','image/png','image/webp','application/pdf'];
-    if(!okTypes.includes(file.type)){ toast('Please upload a JPG, PNG, WebP or PDF'); return; }
+    const okTypes=['image/jpeg','image/png','application/pdf'];
+    if(!okTypes.includes(file.type)){ toast('Please upload a JPG, PNG or PDF'); return; }
     const s=S(); const isPdf=file.type==='application/pdf';
     if(s.url) URL.revokeObjectURL(s.url);
     Object.assign(s,{file,isPdf,url:URL.createObjectURL(file),imgW:0,imgH:0,zoom:1,x:0,y:0,mode:'fill'});

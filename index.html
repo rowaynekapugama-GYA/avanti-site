@@ -2119,7 +2119,7 @@ const GYA = (() => {
     const route = '/' + seg.join('/');
     document.body.classList.toggle('gya-admin-mode', seg[0] === 'admin' || seg[0] === 'login');
     if (seg[0] === 'admin' || seg[0] === 'login') { document.title = `${seg[0] === 'login' ? 'Sign in' : 'Dashboard'} | ${cfg.brand}`; setMeta('name', 'robots', 'noindex'); return; }
-    setMeta('name', 'robots', '');
+    setMeta('name', 'robots', adapter && adapter.noindex && adapter.noindex(route) ? 'noindex' : '');
     applyContent(document); applySeo(route, title);   // whole page: top bar and footer sit outside #main
   }
 
@@ -2685,7 +2685,7 @@ const GYA = (() => {
         ${ui.check('has_personalisation', p.has_personalisation, 'Has a personalisation form')}
         ${ui.field('Personalisation fields (JSON)', ui.area('personalisation', p.personalisation ? JSON.stringify(p.personalisation, null, 1) : '', 6, 'spellcheck="false"'), 'Order form fields such as name, age, font and event date. Ask your web team before changing.')}
         ${ui.field('Colour swatches (JSON)', ui.area('swatches', p.swatches ? JSON.stringify(p.swatches) : '', 3, 'spellcheck="false"'), 'Colour name to hex code, for example {"Red":"#b00023"}.')}
-        <div class="gya-grid2">${ui.field('Preview wording', ui.text('preview_text', p.preview_text), 'Fixed wording shown in the preview.')}${ui.field('Tags', ui.text('tags', (p.tags || []).join(', ')), 'Comma separated, used for filters.')}</div>
+        <div class="gya-grid2">${ui.field('Preview wording', ui.text('preview_text', p.preview_text), 'Fixed wording shown in the preview.')}${ui.field('Tags', ui.text('tags', (p.tags || []).join(', ')), 'Comma separated, used for filters. Add <b>hidden</b> to keep a product out of the shop, search and Google; it can still be bought from its own link.')}</div>
       </details>
       ${ui.card('Search and sharing', seoFields(seo))}
     </form>`;
@@ -3448,6 +3448,11 @@ GYA.use({
     if (kind === 'blog' && slug) { const b = POSTS.find(x => x.slug === slug); return b && (b.seo || b.excerpt); }
     return '';
   },
+  noindex(route) {   // hidden products: reachable by link, kept out of search engines
+    const [, kind, slug] = route.split('/');
+    if (kind === 'product') { const p = prod(slug); return !!(p && !listed(p)); }
+    return false;
+  },
   shareImage(route) {
     const abs = u => u ? new URL(u, location.href).href : '';
     const [, kind, slug] = route.split('/');
@@ -3479,7 +3484,10 @@ const $$ = (s,el=document)=>[...el.querySelectorAll(s)];
 const money = n => '$'+n.toFixed(2);
 const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const cat = s => CATS.find(c=>c.s===s);
-const byCat = s => PRODUCTS.filter(p=>p.c===s);
+/* Products tagged "hidden" (dashboard > Products > Personalisation and advanced > Tags) can be bought
+   from their own link but stay out of the shop, categories, search, counts and search engines. */
+const listed = p => !(p.tags && p.tags.includes('hidden'));
+const byCat = s => PRODUCTS.filter(p=>p.c===s && listed(p));
 const prod = s => PRODUCTS.find(p=>p.s===s);
 
 /* ---- images / placeholders ---- */
@@ -3732,7 +3740,7 @@ function pageHome(){
   </div></section>
 
   <section class="section"><div class="wrap">
-    <div class="section-head"><div><span class="eyebrow">Everything we make</span><h2>Shop by product</h2></div><a class="btn btn-line" href="#/shop">All ${PRODUCTS.length} products</a></div>
+    <div class="section-head"><div><span class="eyebrow">Everything we make</span><h2>Shop by product</h2></div><a class="btn btn-line" href="#/shop">All ${PRODUCTS.filter(listed).length} products</a></div>
     <div class="cat-groups">${GROUPS.map(g=>{ const cs=CATS.filter(c=>c.g===g); const wide=cs.length<=2;
       const tile=c=>`<a class="ctile" href="#/shop/${c.s}"><div class="thumb">${catThumb(c)}<div class="desc">${c.blurb}</div></div><b>${c.n}</b><span>${byCat(c.s).length} product${byCat(c.s).length===1?'':'s'}</span></a>`;
       return `<div class="cat-group"><div class="g-head"><h3>${g}<small>${cs.reduce((s,c)=>s+byCat(c.s).length,0)} products</small></h3>${wide?'':`<div class="crsl-nav"><button data-cprev aria-label="Scroll ${g} left"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><button data-cnext aria-label="Scroll ${g} right"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>`}</div><div class="${wide?'tiles wide':'track'}">${cs.map(tile).join('')}</div></div>`}).join('')}</div>
@@ -3765,11 +3773,11 @@ function pageHome(){
 
 function pageShop(catSlug, q){
   const c = catSlug ? cat(catSlug) : null;
-  let list = c ? byCat(c.s) : PRODUCTS.slice();
+  let list = c ? byCat(c.s) : PRODUCTS.filter(listed);
   const sub = c && c.s==='wallpaper' ? ['kids','office','texture','pattern'] : null;
-  if(q){ const t=q.toLowerCase(); list = PRODUCTS.filter(p=>(p.n+' '+p.d+' '+cat(p.c).n).toLowerCase().includes(t)); }
+  if(q){ const t=q.toLowerCase(); list = PRODUCTS.filter(p=>listed(p) && (p.n+' '+p.d+' '+cat(p.c).n).toLowerCase().includes(t)); }
   const title = q ? `Results for "${esc(q)}"` : c ? c.n : 'All products';
-  const blurb = q ? `${list.length} product${list.length===1?'':'s'} match.` : c ? c.blurb : `${PRODUCTS.length} products across packaging, signage, wallpaper and cake toppers, all made in Western Sydney.`;
+  const blurb = q ? `${list.length} product${list.length===1?'':'s'} match.` : c ? c.blurb : `${PRODUCTS.filter(listed).length} products across packaging, signage, wallpaper and cake toppers, all made in Western Sydney.`;
   return `
   <div class="shop-head"><div class="wrap">
     <div class="crumbs"><a href="#/">Home</a> / <a href="#/shop">Shop</a>${c?` / <span>${c.n}</span>`:''}</div>
@@ -4173,7 +4181,7 @@ function pageAbout(){ return `
   <div class="page-head"><div class="wrap"><span class="eyebrow">About Avanti</span><h1 data-cms="about.title" data-cms-label="Heading">A print factory, not a print broker.</h1><p data-cms="about.intro" data-cms-label="Intro">We specialise in high-quality, customised print and packaging for Australian businesses. Pull-up banners, custom mailer boxes, branded shipping cartons and signage, all brought to life by our in-house team through expert printing and engraving.</p></div></div>
   <div class="wrap about-grid">
     <div><p data-cms="about.body1" data-cms-label="Paragraph 1">Whether you're a growing startup or an established brand, no project is too big or too small. Because everything is made by us, on our own machines, we can turn jobs around fast without sacrificing quality, and we answer the phone when you call.</p><p data-cms="about.body2" data-cms-label="Paragraph 2">Looking for ways to elevate your brand presentation? Follow us on social media to see our latest business branding solutions in action, or get in touch with our team by phone or email.</p>
-      <div class="stats"><div><b>100%</b><span>Australian owned and operated</span></div><div><b>${PRODUCTS.length}</b><span>Products made to order</span></div><div><b>24 hrs</b><span>Dispatch after proof approval</span></div></div>
+      <div class="stats"><div><b>100%</b><span>Australian owned and operated</span></div><div><b>${PRODUCTS.filter(listed).length}</b><span>Products made to order</span></div><div><b>24 hrs</b><span>Dispatch after proof approval</span></div></div>
       <div style="margin-top:28px;display:flex;gap:10px;flex-wrap:wrap"><a class="btn btn-red" href="#/shop">View all products</a><a class="btn btn-ghost" href="#/contact">Talk to us</a></div></div>
     <img data-cms-img="about.image" data-cms-label="Photo" src="assets/products/unsplash_-uHVRvDr7pg-copy.jpg" alt="Avanti Print and Design workshop">
   </div>

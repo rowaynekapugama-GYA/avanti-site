@@ -202,7 +202,7 @@ ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-si
     + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
     + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
     + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n\nOpen in the dashboard: ${admin}`;
-  return { subject: `${failed ? 'Payment failed: order' : 'New order'} ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
+  return { subject: failed ? `Payment failed for order ${o.number} (${money(o.total_cents)}, ${o.name || o.email})` : `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
 }
 
 // A note from the Avanti team to the customer about their order (like WooCommerce's "customer note").

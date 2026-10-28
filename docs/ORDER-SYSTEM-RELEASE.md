@@ -137,3 +137,17 @@ If anything goes wrong after going live:
    function and index are simply unused). If you want the old "tracking number required" rule
    back, re-run the `order_transition` part of `scripts/migrations/002-orders.sql` (this also
    removes the cancelled to refunded step).
+
+## Update 29 October 2026: WooCommerce-style notifications
+
+| Email | Goes to | When |
+| --- | --- | --- |
+| Order confirmation | Customer, copy to Avanti | Payment confirmed |
+| New order | Avanti | Payment confirmed |
+| Payment failed | Avanti | Stripe or PayPal reports a failed payment |
+| Processing, Dispatched, Delivered | Customer, copy to Avanti | Staff change the status (tick box on) |
+| Cancelled, Refunded | Customer, copy to Avanti | Staff cancel, or a full refund in Stripe or PayPal |
+| Note to customer | Customer, copy to Avanti | Staff add a note with "Email this note to the customer" ticked |
+
+Copies can be turned off in Email log. They go as a hidden copy (Bcc), so the customer never
+sees Avanti's address in the recipients.

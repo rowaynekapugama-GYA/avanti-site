@@ -734,7 +734,7 @@ test('a failed payment alerts the Avanti team once; tidy-up cancellations stay s
   assert.equal((await postStripe(ev('evt_fail_1'))).status, 200);
   await postStripe(ev('evt_fail_2'));
   assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'cancelled');
-  const alerts = staffMail().filter(m => /^Payment failed: order/.test(m.subject));
+  const alerts = staffMail().filter(m => /^Payment failed for order AVP-/.test(m.subject));
   assert.equal(alerts.length, 1); assert.equal(alerts[0].reply_to, 'jo.buyer@example.com');
   assert.match(alerts[0].text, /not been charged/);
   assert.equal(customerMail().length, 0);                                      // the customer isn't emailed

@@ -1,5 +1,20 @@
 # Changelog
 
+## 29 October 2026: WooCommerce-style order notifications
+
+So Avanti hears about every order change, the way WooCommerce worked:
+
+- **Copies to Avanti.** Every email sent to a customer (confirmation, processing, dispatched,
+  delivered, cancelled, refunded, notes) also goes to `ADMIN_NOTIFICATION_EMAIL`
+  (info@avantiprint.com.au) as a hidden copy. On by default; Email log > "Turn copies off".
+- **Payment failed alert.** If Stripe or PayPal says a payment failed, the Avanti team gets a
+  "Payment failed for order ..." email with the customer's details, once. The customer isn't
+  emailed, and staff or automatic tidy-ups of unfinished checkouts stay silent.
+- **Note to customer.** On the order page, tick "Email this note to the customer" when adding a
+  note and it's emailed to them (with a copy to Avanti) and shown on the timeline.
+- No database change. `EMAIL_TEST_RECIPIENT` never copies anyone else in.
+- Files: `api/_lib/effects.js`, `api/_lib/email.js`, `api/admin.js`, `index.html`, `tests/api.test.mjs` (3 new tests, 40 pass).
+
 ## 28 October 2026: order emails, order status management and analytics
 
 Client request: email the customer the order details, mark orders as Processing or Dispatched

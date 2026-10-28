@@ -1850,6 +1850,20 @@ const GYA = (() => {
   const isJwt = k => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(String(k || ''));
   const hash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
   const state = { source: 'seed', error: null, content: {}, seo: {}, settings: {}, defaults: {}, touched: false, dirty: false, session: ls.get(KEY.session), profile: null };
+  // Password reset links from Supabase land on SITE/#access_token=...&type=recovery (or #error=... when the
+  // link has expired). Catch that before the shop's router sees it: keep the token in memory only, take it out
+  // of the address bar, and show the "choose a new password" page.
+  (function catchAuthRedirect() {
+    const h = location.hash.replace(/^#\/?/, '');
+    if (!/(^|&)(access_token|error|error_description)=/.test(h)) return;
+    const q = new URLSearchParams(h);
+    if (q.get('access_token') && /^(recovery|invite|magiclink)$/.test(q.get('type') || '')) {
+      state.recovery = { access_token: q.get('access_token'), refresh_token: q.get('refresh_token'), expires_in: +q.get('expires_in') || 3600 };
+    } else {
+      state.recoveryError = q.get('error_description') || q.get('error') || 'That link is not valid.';
+    }
+    history.replaceState(null, '', location.pathname + location.search + '#/login/reset');
+  })();
   let adapter = null;
   const sections = [];
 
@@ -2291,6 +2305,24 @@ const GYA = (() => {
 
   /* ---------- pages: login + admin shell ---------- */
   function page(seg) {
+    const card = (id, inner) => `<div class="gya-admin gya-login"><form class="gya-card gya-login-card" id="${id}" novalidate><span class="gya-eyebrow">${esc(cfg.brand)}</span>${inner}</form></div>`;
+    if (seg[0] === 'login' && seg[1] === 'forgot') return card('gyaForgot', `<h1>Reset your password</h1>
+      <p class="gya-muted">Enter the email you sign in with. If it has a staff account, we'll email you a link to choose a new password.</p>
+      ${ui.field('Email', '<input class="gya-in" type="email" name="email" autocomplete="username" required>')}
+      <p class="gya-err" id="gyaFErr" role="alert" hidden></p><p class="gya-note" id="gyaFOk" hidden></p>
+      <button class="gya-btn gya-btn-red" type="submit">Email me a reset link</button>
+      <p class="gya-muted"><a href="#/login">Back to sign in</a></p>`);
+    if (seg[0] === 'login' && seg[1] === 'reset') {
+      if (!state.recovery) return card('gyaReset', `<h1>Choose a new password</h1>
+        <p class="gya-err">${state.recoveryError ? 'This reset link has expired or has already been used.' : 'Open this page from the link in your password reset email.'}</p>
+        <p class="gya-muted"><a href="#/login/forgot">Send a new reset link</a> · <a href="#/login">Back to sign in</a></p>`);
+      return card('gyaReset', `<h1>Choose a new password</h1>
+        <p class="gya-muted">At least 8 characters. You'll be signed in straight after.</p>
+        ${ui.field('New password', '<input class="gya-in" type="password" name="pw1" autocomplete="new-password" minlength="8" required>')}
+        ${ui.field('Type it again', '<input class="gya-in" type="password" name="pw2" autocomplete="new-password" minlength="8" required>')}
+        <p class="gya-err" id="gyaRErr" role="alert" hidden></p>
+        <button class="gya-btn gya-btn-red" type="submit">Save new password</button>`);
+    }
     if (seg[0] === 'login') return `<div class="gya-admin gya-login"><form class="gya-card gya-login-card" id="gyaLogin" novalidate>
       <span class="gya-eyebrow">${esc(cfg.brand)}</span><h1>Staff sign in</h1>
       ${state.idleOut ? '<p class="gya-note" id="gyaIdleNote">You were signed out because there was no activity for a while. Please sign in again.</p>' : ''}
@@ -2300,10 +2332,56 @@ const GYA = (() => {
       ${ui.field('Password', '<input class="gya-in" type="password" name="password" autocomplete="current-password" required>')}
       <p class="gya-err" id="gyaLoginErr" role="alert" hidden></p>
       <button class="gya-btn gya-btn-red" type="submit">Sign in</button>
+      ${window.GYA_DEMO || !enabled ? '' : '<p class="gya-muted"><a href="#/login/forgot">Forgot your password?</a></p>'}
       <p class="gya-muted">No account? Staff accounts are set up by your web team.</p></form></div>`;
     return `<div class="gya-admin" id="gyaAdmin"><p class="gya-muted gya-pad">Loading dashboard...</p></div>`;
   }
   async function after(seg) {
+    if (seg[0] === 'login' && seg[1] === 'forgot') {
+      const f = qs('#gyaForgot'), err = qs('#gyaFErr'), okMsg = qs('#gyaFOk'), b = qs('button[type=submit]', f);
+      f.addEventListener('submit', async e => {
+        e.preventDefault(); err.hidden = true; okMsg.hidden = true;
+        const email = f.email.value.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err.textContent = 'Enter the email address you sign in with.'; err.hidden = false; return; }
+        b.disabled = true; b.textContent = 'Sending...';
+        try {
+          const back = location.origin + location.pathname;
+          const r = await fetch(`${cfg.supabaseUrl}/auth/v1/recover?redirect_to=${encodeURIComponent(back)}`, { method: 'POST',
+            headers: { apikey: cfg.anonKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+          if (r.status === 429) throw new Error('Too many reset emails have been sent recently. Please wait an hour and try again.');
+          if (!r.ok) throw await readError(r);
+          okMsg.textContent = `If ${email} has a staff account, a reset link is on its way. It works once and expires after an hour. Check your spam folder if it hasn't arrived in a few minutes.`;
+          okMsg.hidden = false; b.textContent = 'Sent';
+        } catch (x) { err.textContent = x.message; err.hidden = false; b.disabled = false; b.textContent = 'Email me a reset link'; }
+      });
+      return;
+    }
+    if (seg[0] === 'login' && seg[1] === 'reset') {
+      const f = qs('#gyaReset'); if (!f || !state.recovery) return;
+      const err = qs('#gyaRErr'), b = qs('button[type=submit]', f);
+      f.addEventListener('submit', async e => {
+        e.preventDefault(); err.hidden = true;
+        const pw = f.pw1.value;
+        const say = m => { err.textContent = m; err.hidden = false; };
+        if (pw.length < 8) return say('Use at least 8 characters.');
+        if (pw !== f.pw2.value) return say("The two passwords don't match.");
+        b.disabled = true; b.textContent = 'Saving...';
+        try {
+          const rec = state.recovery;
+          const r = await fetch(`${cfg.supabaseUrl}/auth/v1/user`, { method: 'PUT',
+            headers: { apikey: cfg.anonKey, Authorization: `Bearer ${rec.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
+          if (r.status === 401 || r.status === 403) throw new Error('This reset link has expired. Please request a new one.');
+          if (!r.ok) throw await readError(r);
+          const user = await r.json();
+          setSession({ access_token: rec.access_token, refresh_token: rec.refresh_token, expires_in: rec.expires_in, user }); touch(true);
+          state.recovery = null; state.recoveryError = null;
+          if (await loadProfile()) { location.hash = '#/admin'; toast('Password updated'); return; }
+          await signOut(); say('Your password was updated, but this account does not have dashboard access.');
+          b.textContent = 'Save new password';
+        } catch (x) { say(x.message); b.disabled = false; b.textContent = 'Save new password'; }
+      });
+      return;
+    }
     if (seg[0] === 'login') {
       const f = qs('#gyaLogin'), err = qs('#gyaLoginErr'); state.idleOut = false;
       if (state.session && await loadProfile()) { location.hash = '#/admin'; return; }

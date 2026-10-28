@@ -408,10 +408,15 @@
         return { status: 'logged', to }; }
       case 'email-settings': {
         if (typeof b.order_emails === 'boolean') upsertRows('site_settings', [{ key: 'order_emails', value: b.order_emails }], 'key');
-        return { sending: false, order_emails_env: true, order_emails_switch: emailsOn(), test_recipient: null, staff_email: 'info@avantiprint.com.au', timezone: 'Australia/Sydney' }; }
+        if (typeof b.order_email_copies === 'boolean') upsertRows('site_settings', [{ key: 'order_email_copies', value: b.order_email_copies }], 'key');
+        const cp = db.t.site_settings.find(x => x.key === 'order_email_copies');
+        return { sending: false, order_emails_env: true, order_emails_switch: emailsOn(), copies: !(cp && cp.value === false), test_recipient: null, staff_email: 'info@avantiprint.com.au', timezone: 'Australia/Sydney' }; }
       case 'analytics': return demoAnalytics(b);
       case 'order-note': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
-        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: b.note, created_at: now() })); return { ok: true }; }
+        if (b.to_customer) { if (!emailsOn()) bad('Order emails are switched off. Switch them on in Email log first.');
+          logMail({ kind: 'transactional', template: 'order-note', to_email: o.email, order_id: o.id, subject: `A note about your order ${o.number}` }); }
+        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: b.to_customer ? `Note emailed to the customer: ${b.note}` : b.note, created_at: now() }));
+        return b.to_customer ? { ok: true, status: 'logged', to: o.email } : { ok: true }; }
       case 'campaign-test': { const c = b.campaign || db.t.campaigns.find(x => x.id === b.campaign_id) || {};
         logMail({ kind: 'test', template: 'campaign-test', to_email: 'you (demo)', campaign_id: c.id || null, subject: '[Test] ' + (c.subject || '') }); return { status: 'logged', to: 'your inbox (demo: nothing is actually sent)' }; }
       case 'campaign-preview': return { html: previewHtml(b.campaign || {}) };
@@ -3101,7 +3106,8 @@ const GYA = (() => {
     refunded: ['Mark refunded', 'Only do this once the refund has been issued in Stripe or PayPal.', 'an email confirming their refund'],
   };
   const MAIL = { 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
-    'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team' };
+    'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team',
+    'order-note': 'Note to the customer', 'order-failed-staff': 'Payment-failed alert to the Avanti team' };
   const mailName = t => MAIL[t] || String(t || '').replace('order-', '').replace('_', ' ');
   async function orderDetail(main, id) {
     const [o] = await rest(`orders?select=*&id=eq.${enc(id)}`);
@@ -3132,7 +3138,8 @@ const GYA = (() => {
             <tr><td colspan="3">Delivery${o.delivery_method ? `<div class="gya-muted">${esc(o.delivery_method)}</div>` : ''}${o.delivery_quote_required ? '<div class="gya-warn-t">Some items need a courier quote</div>' : ''}</td><td>${$c(o.delivery_cents)}</td></tr>
             <tr><td colspan="3"><b>Total (AUD)</b><div class="gya-muted">Includes GST of ${$c(o.gst_cents)}</div></td><td><b>${$c(o.total_cents)}</b></td></tr></tbody></table></div></section>
           <section class="gya-card"><h3>Timeline</h3><ol class="gya-timeline">${timeline}</ol>
-            <div class="gya-row" style="margin-top:10px"><input class="gya-in" id="odNote" placeholder="Add an internal note (not sent to the customer)"><button class="gya-btn gya-btn-line" id="odNoteBtn">Add note</button></div></section>
+            <div class="gya-row" style="margin-top:10px"><input class="gya-in" id="odNote" placeholder="Add a note"><button class="gya-btn gya-btn-line" id="odNoteBtn">Add note</button></div>
+            <label class="gya-check"><input type="checkbox" id="odNoteMail"><span>Email this note to the customer (otherwise only staff see it)</span></label></section>
         </div>
         <div>
           <section class="gya-card"><h3>Customer</h3><p><b>${esc(o.name || '')}</b>${o.company ? `<br>${esc(o.company)}` : ''}<br><a class="gya-link" href="mailto:${esc(o.email)}">${esc(o.email)}</a>${o.phone ? `<br><a class="gya-link" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>` : ''}</p>
@@ -3181,7 +3188,12 @@ const GYA = (() => {
       busy(b, async () => { const r = await server('order-resend-email', { order_id: o.id, which: staff ? 'staff' : 'customer' });
         toast(r.status === 'failed' ? 'The email could not be sent. See the timeline for details.' : `Email ${r.status === 'logged' ? 'recorded' : 'sent'} to ${r.to}`, r.status === 'failed'); orderDetail(main, id); });
     });
-    qs('#odNoteBtn', main).onclick = e => { const n = qs('#odNote', main).value.trim(); if (!n) return; busy(e.target, async () => { await server('order-note', { order_id: o.id, note: n }); orderDetail(main, id); }); };
+    qs('#odNoteBtn', main).onclick = e => { const n = qs('#odNote', main).value.trim(); if (!n) return;
+      const mail = qs('#odNoteMail', main).checked;
+      if (mail && !confirm(`Email this note to ${o.email}?\n\n"${n}"`)) return;
+      busy(e.target, async () => { const r = await server('order-note', mail ? { order_id: o.id, note: n, to_customer: true } : { order_id: o.id, note: n });
+        if (mail) toast(r.status === 'failed' ? 'The note could not be emailed. See the timeline.' : `Note ${r.status === 'logged' ? 'recorded' : 'emailed'} to ${r.to}`, r.status === 'failed');
+        orderDetail(main, id); }); };
     qsa('[data-dl]', main).forEach(b => b.onclick = () => G.download('artwork', b.dataset.dl).catch(e => toast(e.message, true)));
   }
   G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
@@ -3575,11 +3587,15 @@ const GYA = (() => {
       const on = st.order_emails_env && st.order_emails_switch;
       box.innerHTML = `<section class="gya-card"><div class="gya-cardhead"><h3>Order emails ${pill(on ? 'subscribed' : 'unsubscribed', on ? 'On' : 'Off')}</h3>
           ${st.order_emails_env ? `<button class="gya-btn ${st.order_emails_switch ? 'gya-btn-line' : 'gya-btn-red'} gya-btn-sm" id="lfSwitch">${st.order_emails_switch ? 'Switch off' : 'Switch on'}</button>` : ''}</div>
-        <p class="gya-small" style="margin:0">${on ? `Customers get an email when their order is confirmed, processing, dispatched, delivered, cancelled or refunded.${st.staff_email ? ` New orders are also sent to <b>${esc(st.staff_email)}</b>.` : ''}`
+        <p class="gya-small" style="margin:0">${on ? `Customers get an email when their order is confirmed, processing, dispatched, delivered, cancelled or refunded.${st.staff_email ? ` New orders and failed payments are also sent to <b>${esc(st.staff_email)}</b>.` : ''}`
           : st.order_emails_env ? 'Switched off here: no order emails go to customers or staff until you switch them back on. Orders and payments carry on as normal.'
           : 'Switched off in Vercel (ORDER_EMAILS_ENABLED=false). Change it there to turn order emails back on.'}</p>
+        ${st.staff_email && on ? `<div class="gya-row" style="margin-top:10px;justify-content:space-between"><span class="gya-small">${st.copies ? `<b>Copies on:</b> ${esc(st.staff_email)} also gets a copy of every email sent to a customer (confirmation, status updates, cancellations, refunds, notes).` : `<b>Copies off:</b> ${esc(st.staff_email)} only gets new-order and payment-failed alerts.`}</span>
+          <button class="gya-btn gya-btn-line gya-btn-sm" id="lfCopies">${st.copies ? 'Turn copies off' : 'Turn copies on'}</button></div>` : ''}
         ${!st.sending ? '<p class="gya-warn" style="margin:10px 0 0">The email service (Resend) is not connected yet, so emails are recorded below as “Logged only” but not delivered.</p>' : ''}
         ${st.test_recipient ? `<p class="gya-warn" style="margin:10px 0 0">Test mode: every email goes to <b>${esc(st.test_recipient)}</b> only (EMAIL_TEST_RECIPIENT).</p>` : ''}</section>`;
+      const cp = qs('#lfCopies', box);
+      if (cp) cp.onclick = () => busy(cp, async () => { await settings({ order_email_copies: !st.copies }); toast(st.copies ? 'Copies turned off' : 'Copies turned on'); });
       const b = qs('#lfSwitch', box);
       if (b) b.onclick = () => { const next = !st.order_emails_switch;
         if (!confirm(next ? 'Switch order emails back on?' : 'Switch off all order emails? Customers will not be told about new orders or status changes until you switch them back on.')) return;

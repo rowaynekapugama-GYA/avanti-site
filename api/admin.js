@@ -2,7 +2,7 @@
 // Reads happen straight from the database with row-level security; anything that changes an
 // order, sends email or touches consent comes through here so it is validated and audited.
 import { config, db, handle, json, readJson, requireAdmin, HttpError, audit } from './_lib/core.js';
-import { move, sendOrderEmail, sendStaffAlert, orderEmailsOn } from './_lib/effects.js';
+import { move, sendOrderEmail, sendStaffAlert, sendCustomerNote, orderEmailsOn, flag } from './_lib/effects.js';
 import { loadOrder } from './_lib/orders.js';
 import { CARRIERS, marketingEmail } from './_lib/email.js';
 import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, subscribe, unsubscribe, runScheduled, runAutomations } from './_lib/marketing.js';
@@ -47,8 +47,14 @@ export const POST = handle(async (req) => {
         catch (e) { throw new HttpError(409, 'The on/off switch needs the database update (migration 004). Run it in Supabase, then try again.'); }
         await audit(d, who, b.order_emails ? 'order_emails.on' : 'order_emails.off', 'app_flags', 'order_emails', {});
       }
+      if (typeof b.order_email_copies === 'boolean') {
+        try { await d.insert('app_flags', [{ key: 'order_email_copies', value: b.order_email_copies, updated_at: new Date().toISOString() }], { onConflict: 'key' }); }
+        catch (e) { throw new HttpError(409, 'This switch needs the database update (migration 004). Run it in Supabase, then try again.'); }
+        await audit(d, who, b.order_email_copies ? 'order_email_copies.on' : 'order_email_copies.off', 'app_flags', 'order_email_copies', {});
+      }
       let sw = null; try { sw = await d.one('app_flags', 'select=value&key=eq.order_emails'); } catch (e) { /* not set up yet: on */ }
-      return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false),
+      const copies = await flag(d, 'order_email_copies');
+      return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false), copies,
         test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminNotify === 'off' ? null : cfg.email.adminNotify || null, timezone: cfg.timezone });
     }
     case 'analytics': {
@@ -59,10 +65,19 @@ export const POST = handle(async (req) => {
       if ((new Date(to) - new Date(from)) / 864e5 > 3700) throw new HttpError(400, 'Choose a range of ten years or less.');
       return json(await d.rpc('admin_order_analytics', { p_from: from, p_to: to, p_tz: cfg.timezone, p_exclude_cancelled: b.exclude_cancelled !== false }));
     }
-    case 'order-note': {
+    case 'order-note': {   // internal note, or (to_customer) a note emailed to the customer
+      const text = need(String(b.note || '').trim(), 'Write a note first.').slice(0, 2000);
+      if (b.to_customer === true) {
+        const o = await loadOrder(d, need(b.order_id, 'Missing order.'));
+        if (!o) throw new HttpError(404, 'Order not found.');
+        if (!(await orderEmailsOn(d, cfg))) throw new HttpError(409, 'Order emails are switched off. Switch them on in Email log first.');
+        const r = await sendCustomerNote(d, o, text, cfg);
+        await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `Note emailed to the customer: ${text}`, data: { to_customer: true } });
+        return json({ ok: true, status: r.status, to: r.to_email });
+      }
       const o = await d.one('orders', `select=id,status&id=eq.${d.q(need(b.order_id, 'Missing order.'))}`);
       if (!o) throw new HttpError(404, 'Order not found.');
-      await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: need(String(b.note || '').trim(), 'Write a note first.').slice(0, 2000) });
+      await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: text });
       return json({ ok: true });
     }
     case 'campaign-test': {

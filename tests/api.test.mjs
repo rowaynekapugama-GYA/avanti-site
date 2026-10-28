@@ -704,3 +704,66 @@ test('review fixes: refund after cancelling, never-paid checkouts, own delivery 
   assert.equal((await d.one('app_flags', 'select=value&key=eq.order_emails')).value, false);
   await act(adminToken, 'email-settings', { order_emails: true });
 });
+
+// ======================= WooCommerce-style notifications =======================
+test('Avanti gets a copy of every customer email, unless copies are turned off', async () => {
+  await reset();
+  const o = await paidOrder();
+  const conf = customerMail()[0];
+  assert.deepEqual(conf.bcc, ['info@avantiprint.com.au']);                     // hidden copy to Avanti
+  assert.equal(staffMail()[0].bcc, undefined);                                 // the staff alert itself isn't copied
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production' });
+  assert.deepEqual(customerMail().at(-1).bcc, ['info@avantiprint.com.au']);
+  let r = await act(adminToken, 'email-settings', { order_email_copies: false });
+  assert.equal(r.status, 200); assert.equal(r.data.copies, false);
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched', carrier: 'Sendle' });
+  assert.equal(customerMail().at(-1).bcc, undefined);
+  r = await act(adminToken, 'email-settings', { order_email_copies: true });
+  assert.equal(r.data.copies, true);
+  // test mode never copies anyone else in
+  process.env.EMAIL_TEST_RECIPIENT = 'tester@gya.test';
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'delivered' });
+  delete process.env.EMAIL_TEST_RECIPIENT;
+  assert.equal(mocks.state.emails.at(-1).to[0], 'tester@gya.test'); assert.equal(mocks.state.emails.at(-1).bcc, undefined);
+});
+
+test('a failed payment alerts the Avanti team once; tidy-up cancellations stay silent', async () => {
+  await reset();
+  const o = await newOrder('stripe');
+  const ev = id => stripeEvent(o, 'checkout.session.async_payment_failed', { payment_status: 'unpaid' }, id);
+  assert.equal((await postStripe(ev('evt_fail_1'))).status, 200);
+  await postStripe(ev('evt_fail_2'));
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'cancelled');
+  const alerts = staffMail().filter(m => /^Payment failed: order/.test(m.subject));
+  assert.equal(alerts.length, 1); assert.equal(alerts[0].reply_to, 'jo.buyer@example.com');
+  assert.match(alerts[0].text, /not been charged/);
+  assert.equal(customerMail().length, 0);                                      // the customer isn't emailed
+  // staff cancelling an unfinished checkout, or the 14-day clean-up, send nothing
+  const a = await newOrder('stripe');
+  await act(adminToken, 'order-transition', { order_id: a.order_id, to: 'cancelled' });
+  assert.equal(staffMail().filter(m => /Payment failed/.test(m.subject)).length, 1);
+});
+
+test('notes can be emailed to the customer; internal notes are not', async () => {
+  await reset();
+  const o = await paidOrder();
+  let r = await act(adminToken, 'order-note', { order_id: o.order_id, note: 'Proof looks good, printing Monday.' });
+  assert.equal(r.status, 200); assert.equal(customerMail().filter(m => /note about your order/.test(m.subject)).length, 0);
+  r = await act(adminToken, 'order-note', { order_id: o.order_id, note: 'Hi Jo,\nyour banners ship Tuesday.', to_customer: true });
+  assert.equal(r.status, 200); assert.equal(r.data.status, 'sent'); assert.equal(r.data.to, 'jo.buyer@example.com');
+  const m = customerMail().filter(x => /A note about your order AVP-/.test(x.subject));
+  assert.equal(m.length, 1); assert.match(m[0].text, /your banners ship Tuesday/); assert.match(m[0].html, /Hi Jo,<br>your banners ship Tuesday/);
+  assert.deepEqual(m[0].bcc, ['info@avantiprint.com.au']);
+  assert.ok((await events(o.order_id)).some(e => /^Note emailed to the customer: Hi Jo/.test(e.note || '')));
+  assert.ok((await logs(`order_id=eq.${o.order_id}&template=eq.order-note`)).length === 1);
+  // a second note is a new email, not a duplicate
+  await act(adminToken, 'order-note', { order_id: o.order_id, note: 'Shipped!', to_customer: true });
+  assert.equal(customerMail().filter(x => /A note about your order/.test(x.subject)).length, 2);
+  // notes are escaped, and refused while emails are off
+  await act(adminToken, 'order-note', { order_id: o.order_id, note: '<script>x</script>', to_customer: true });
+  assert.doesNotMatch(customerMail().at(-1).html, /<script>x/);
+  await act(adminToken, 'email-settings', { order_emails: false });
+  assert.equal((await act(adminToken, 'order-note', { order_id: o.order_id, note: 'hello', to_customer: true })).status, 409);
+  await act(adminToken, 'email-settings', { order_emails: true });
+  assert.equal((await act(editorToken, 'order-note', { order_id: o.order_id, note: 'x', to_customer: true })).status, 403);
+});

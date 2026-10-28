@@ -7,7 +7,7 @@ import { config, escHtml as e, money, HttpError } from './core.js';
 // marked 'logged' and nothing leaves the building (useful for staging and tests).
 // EMAIL_TEST_RECIPIENT: send everything to one test address instead, and say who it was really for.
 const redirect = (msg, cfg) => cfg.email.testRecipient
-  ? { ...msg, to: cfg.email.testRecipient, subject: `[TEST for ${msg.to}] ${msg.subject}` } : msg;
+  ? { ...msg, to: cfg.email.testRecipient, bcc: undefined, subject: `[TEST for ${msg.to}] ${msg.subject}` } : msg;
 
 export async function sendEmail(d, msg, cfg = config()) {
   msg = redirect(msg, cfg);
@@ -30,7 +30,7 @@ export async function sendEmail(d, msg, cfg = config()) {
   }
 }
 function payload(msg, cfg) {
-  return { from: msg.from || (msg.kind === 'transactional' ? cfg.email.from : cfg.email.marketingFrom), to: [msg.to],
+  return { from: msg.from || (msg.kind === 'transactional' ? cfg.email.from : cfg.email.marketingFrom), to: [msg.to], bcc: msg.bcc ? [msg.bcc] : undefined,
     reply_to: msg.replyTo || cfg.email.replyTo, subject: msg.subject, html: msg.html, text: msg.text, headers: msg.headers || undefined,
     tags: msg.campaign_id ? [{ name: 'campaign', value: msg.campaign_id.replace(/[^\w-]/g, '') }] : undefined };
 }
@@ -177,8 +177,10 @@ export function orderEmail(kind, o, cfg = config()) {
   return { subject: T.subject, html: layout({ preheader: T.pre, body: T.body, cfg }), text: T.text + `\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}` };
 }
 
-// "New order received" email for the Avanti team, with everything needed to start the job.
-export function staffOrderEmail(o, cfg = config()) {
+// Emails for the Avanti team: "New order" (kind 'new', with everything needed to start the job)
+// and "Payment failed" (kind 'failed': the customer's payment didn't go through).
+export function staffOrderEmail(o, cfg = config(), kind = 'new') {
+  const failed = kind === 'failed';
   const a = o.shipping_address || {};
   const admin = `${cfg.siteUrl}/#/admin/orders/${o.id}`;
   const provider = { stripe: 'Card (Stripe)', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '';
@@ -187,18 +189,30 @@ export function staffOrderEmail(o, cfg = config()) {
   const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${i.qty > 1 ? ` <span style="color:${MUTED};font-size:13px">at ${money(i.unit_cents)} each</span>` : ''}
 ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${Object.entries(i.options).map(([k, v]) => `${e(k)}: ${e(v)}`).join(' · ')}</span>` : ''}${art(i) ? `<br><span style="color:${MUTED};font-size:13px">${e(art(i))}</span>` : ''}</td>
 <td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
-  const body = h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`)
+  const body = (failed ? h1(`Payment failed: order ${o.number}`) + p(`<b>${e(o.name || o.email)}</b> tried to pay <b>${money(o.total_cents)}</b>${provider ? ` by ${e(provider)}` : ''}, but the payment didn't go through, so the checkout was cancelled automatically. They have not been charged. You may want to get in touch and help them finish the order.`)
+      : h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`))
     + btn('Open the order in the dashboard', admin)
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
 <tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
 <tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr></table>`
     + p(`<b>Customer</b><br>${e(o.name || '')}${o.company ? `<br>${e(o.company)}` : ''}<br>${e(o.email)}${o.phone ? `<br>${e(o.phone)}` : ''}`)
     + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '');
-  const text = `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n`
+  const text = (failed ? `Payment failed for order ${o.number}: ${money(o.total_cents)}${provider ? ` by ${provider}` : ''}. The checkout was cancelled automatically and the customer has not been charged. You may want to get in touch and help them finish the order.\n\n`
+      : `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n`)
     + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
     + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
     + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n\nOpen in the dashboard: ${admin}`;
-  return { subject: `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
+  return { subject: `${failed ? 'Payment failed: order' : 'New order'} ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
+}
+
+// A note from the Avanti team to the customer about their order (like WooCommerce's "customer note").
+export function customerNoteEmail(o, note, cfg = config()) {
+  const link = `${cfg.siteUrl}/#/order/${o.id}?t=${o.public_token}`;
+  const body = h1('A note about your order') + p(`Hi ${e(first(o.name))}, here's an update about order <b>${e(o.number)}</b>:`)
+    + `<blockquote style="margin:0 0 16px;padding:12px 16px;background:#faf8f5;border-left:3px solid ${RED};border-radius:0 8px 8px 0">${e(note).replace(/\n/g, '<br>')}</blockquote>`
+    + summary(o) + btn('View your order', link) + help(cfg);
+  const text = `Hi ${first(o.name)}, here's an update about order ${o.number}:\n\n${note}\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}`;
+  return { subject: `A note about your order ${o.number}`, html: layout({ preheader: note.slice(0, 90), body, cfg }), text };
 }
 
 // ---------- campaign blocks ----------

@@ -5,7 +5,7 @@
 // in try/catch, problems are written to the order's timeline, and the change itself stands.
 import { config } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
-import { sendEmail, orderEmail, staffOrderEmail } from './email.js';
+import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail } from './email.js';
 
 // Staff can switch order emails off instantly in the dashboard (server-only flag "order_emails" = false).
 // ORDER_EMAILS_ENABLED=false in Vercel switches them off too. If the flag can't be read, behave as before.
@@ -13,6 +13,18 @@ export async function orderEmailsOn(d, cfg = config()) {
   if (!cfg.email.ordersEnabled) return false;
   try { const r = await d.one('app_flags', 'select=value&key=eq.order_emails'); return !(r && r.value === false); }
   catch (e) { return true; }
+}
+
+// "Send Avanti a copy of every customer email" (on unless switched off in the dashboard), like
+// WooCommerce, where the shop hears about every order change. The copy goes as a hidden copy (Bcc).
+export async function flag(d, key, fallback = true) {
+  try { const r = await d.one('app_flags', `select=value&key=eq.${d.q(key)}`); return r ? r.value !== false : fallback; }
+  catch (e) { return fallback; }
+}
+async function copyTo(d, o, cfg) {
+  const to = cfg.email.adminNotify;
+  if (!to || to === 'off' || to === String(o.email || '').toLowerCase()) return undefined;
+  return (await flag(d, 'order_email_copies')) ? to : undefined;
 }
 
 // An email counts as already sent unless every earlier attempt failed.
@@ -28,7 +40,12 @@ export async function sendOrderEmail(d, o, status, { force = false, cfg = config
   if (!m) return { skipped: 'no email for this status' };
   const template = `order-${status}`;
   if (!force && await alreadySent(d, o.id, template)) return { skipped: 'already sent' };
-  return sendEmail(d, { kind: 'transactional', template, to: o.email, order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+  return sendEmail(d, { kind: 'transactional', template, to: o.email, bcc: await copyTo(d, o, cfg), order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+}
+
+// A note typed by staff and sent to the customer. Every note is its own email (never deduplicated).
+export async function sendCustomerNote(d, o, note, cfg = config()) {
+  return sendEmail(d, { kind: 'transactional', template: 'order-note', to: o.email, bcc: await copyTo(d, o, cfg), order_id: o.id, customer_id: o.customer_id, ...customerNoteEmail(o, note, cfg) }, cfg);
 }
 
 export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {}) {
@@ -37,9 +54,14 @@ export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {
   if (!force && await alreadySent(d, o.id, 'order-new-staff')) return { skipped: 'already sent' };
   return sendEmail(d, { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email, ...staffOrderEmail(o, cfg) }, cfg);
 }
+async function sendFailedAlert(d, o, cfg) {
+  const to = cfg.email.adminNotify;
+  if (!to || to === 'off' || await alreadySent(d, o.id, 'order-failed-staff')) return null;
+  return sendEmail(d, { kind: 'transactional', template: 'order-failed-staff', to, order_id: o.id, replyTo: o.email, ...staffOrderEmail(o, cfg, 'failed') }, cfg);
+}
 
 // opts.notify = false: staff unticked "Email the customer" for this change.
-export async function afterTransition(d, orderId, from, to, cfg = config(), opts = {}) {
+export async function afterTransition(d, orderId, from, to, cfg = config(), opts = {}, meta = {}) {
   let o = null;
   try {
     o = await loadOrder(d, orderId);
@@ -50,8 +72,17 @@ export async function afterTransition(d, orderId, from, to, cfg = config(), opts
     if (o) await timelineNote(d, o, `Could not update the customer record: ${String(err.message).slice(0, 300)}`).catch(() => {});
   }
   if (!o) return;
-  // an unpaid checkout that is cancelled is housekeeping, not something to email about
-  if (to === 'cancelled' && from === 'pending_payment') return;
+  // an unpaid checkout that is cancelled: the customer isn't emailed. If Stripe or PayPal said the
+  // payment failed, the Avanti team is told (WooCommerce's "Failed order" email); tidy-ups are silent.
+  if (to === 'cancelled' && from === 'pending_payment') {
+    if (!String(meta.actor || '').startsWith('webhook:')) return;
+    try {
+      if (!(await orderEmailsOn(d, cfg))) return;
+      const r = await sendFailedAlert(d, o, cfg);
+      if (r && r.status === 'failed') await timelineNote(d, o, `Payment-failed email to the Avanti team failed: ${String(r.error || '').slice(0, 300)}`);
+    } catch (err) { console.error('afterTransition: failed-payment alert', orderId, err); }
+    return;
+  }
   try {
     if (!(await orderEmailsOn(d, cfg))) { await timelineNote(d, o, 'Order emails are switched off, so no email was sent.'); return; }
     if (opts.notify === false) await timelineNote(d, o, 'Customer was not emailed about this change.');
@@ -77,8 +108,8 @@ export async function afterTransition(d, orderId, from, to, cfg = config(), opts
 
 // The status change is already saved by the time this runs, so nothing here may turn it into an error.
 export const move = (d, orderId, to, actor, note, data, cfg = config(), opts = {}) =>
-  transition(d, orderId, to, actor, note, data, { after: async (id, from, status) => {
-    try { await afterTransition(d, id, from, status, cfg, opts); }
+  transition(d, orderId, to, actor, note, data, { after: async (id, from, status, meta) => {
+    try { await afterTransition(d, id, from, status, cfg, opts, meta || { actor }); }
     catch (err) { console.error('afterTransition failed', id, err); }
   } });
 

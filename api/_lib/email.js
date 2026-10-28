@@ -5,7 +5,12 @@ import { config, escHtml as e, money, HttpError } from './core.js';
 // ---------- sending ----------
 // Every message is written to email_log first, then sent. Without RESEND_API_KEY the log row is
 // marked 'logged' and nothing leaves the building (useful for staging and tests).
+// EMAIL_TEST_RECIPIENT: send everything to one test address instead, and say who it was really for.
+const redirect = (msg, cfg) => cfg.email.testRecipient
+  ? { ...msg, to: cfg.email.testRecipient, subject: `[TEST for ${msg.to}] ${msg.subject}` } : msg;
+
 export async function sendEmail(d, msg, cfg = config()) {
+  msg = redirect(msg, cfg);
   const [log] = await d.insert('email_log', {
     kind: msg.kind, template: msg.template || null, to_email: msg.to, subject: msg.subject,
     order_id: msg.order_id || null, campaign_id: msg.campaign_id || null, automation_key: msg.automation_key || null,
@@ -14,7 +19,7 @@ export async function sendEmail(d, msg, cfg = config()) {
   try {
     const r = await fetch(`${cfg.email.apiBase}/emails`, { method: 'POST',
       headers: { Authorization: `Bearer ${cfg.email.resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': log.id },
-      body: JSON.stringify(payload(msg, cfg)) });
+      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(10000) });   // a hung email service never holds up an order
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.message || `Resend error ${r.status}`);
     await d.update('email_log', `id=eq.${log.id}`, { status: 'sent', provider_id: data.id });
@@ -26,12 +31,13 @@ export async function sendEmail(d, msg, cfg = config()) {
 }
 function payload(msg, cfg) {
   return { from: msg.from || (msg.kind === 'transactional' ? cfg.email.from : cfg.email.marketingFrom), to: [msg.to],
-    reply_to: cfg.email.replyTo, subject: msg.subject, html: msg.html, text: msg.text, headers: msg.headers || undefined,
+    reply_to: msg.replyTo || cfg.email.replyTo, subject: msg.subject, html: msg.html, text: msg.text, headers: msg.headers || undefined,
     tags: msg.campaign_id ? [{ name: 'campaign', value: msg.campaign_id.replace(/[^\w-]/g, '') }] : undefined };
 }
 
 // Campaigns go out in batches of up to 100 (one API call each), all logged individually.
 export async function sendBatch(d, msgs, cfg = config()) {
+  msgs = msgs.map(m => redirect(m, cfg));
   const results = [];
   for (let i = 0; i < msgs.length; i += 100) {
     const chunk = msgs.slice(i, i + 100);
@@ -99,14 +105,16 @@ const h1 = t => `<h1 style="margin:0 0 14px;font-size:22px;line-height:1.3;color
 const p = t => `<p style="margin:0 0 14px">${t}</p>`;
 const btn = (label, url) => `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0"><tr><td style="background:${RED};border-radius:999px"><a href="${e(url)}" style="display:inline-block;padding:12px 26px;color:#fff;font-weight:bold;text-decoration:none">${e(label)}</a></td></tr></table>`;
 function itemsTable(o) {
-  const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${e(Object.values(i.options).join(' · '))}</span>` : ''}${i.artwork && i.artwork.later ? `<br><span style="color:${MUTED};font-size:13px">Artwork to follow</span>` : ''}</td><td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
+  const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${i.qty > 1 ? ` <span style="color:${MUTED};font-size:13px">at ${money(i.unit_cents)} each</span>` : ''}${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${e(Object.values(i.options).join(' · '))}</span>` : ''}${i.artwork && i.artwork.later ? `<br><span style="color:${MUTED};font-size:13px">Artwork to follow</span>` : ''}</td><td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
+  const sub = o.subtotal_cents != null ? o.subtotal_cents : (o.items || []).reduce((t, i) => t + i.line_cents, 0);
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
+<tr><td style="padding:8px 0">Subtotal</td><td align="right">${money(sub)}</td></tr>
 <tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
 <tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr>
 <tr><td colspan="2" style="color:${MUTED};font-size:12px">Includes GST of ${money(o.gst_cents)}</td></tr></table>`;
 }
-const itemsText = o => (o.items || []).map(i => `- ${i.name} x ${i.qty}${Object.keys(i.options || {}).length ? ` (${Object.values(i.options).join(', ')})` : ''}: ${money(i.line_cents)}`).join('\n')
-  + `\nDelivery: ${money(o.delivery_cents)}\nTotal (AUD): ${money(o.total_cents)} (includes GST of ${money(o.gst_cents)})`;
+const itemsText = o => (o.items || []).map(i => `- ${i.name} x ${i.qty}${i.qty > 1 ? ` at ${money(i.unit_cents)} each` : ''}${Object.keys(i.options || {}).length ? ` (${Object.values(i.options).join(', ')})` : ''}: ${money(i.line_cents)}`).join('\n')
+  + `\nSubtotal: ${money(o.subtotal_cents != null ? o.subtotal_cents : (o.items || []).reduce((t, i) => t + i.line_cents, 0))}\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}\nTotal (AUD): ${money(o.total_cents)} (includes GST of ${money(o.gst_cents)})`;
 const addressText = a => [a.line1, a.line2, `${a.suburb} ${a.state} ${a.postcode}`].filter(Boolean).join(', ');
 const first = n => String(n || '').trim().split(/\s+/)[0] || 'there';
 
@@ -120,43 +128,77 @@ export const CARRIERS = {
   'Own delivery': () => '',
   Other: () => '',
 };
-export const trackingUrl = (o) => o.tracking_url || (CARRIERS[o.carrier] ? CARRIERS[o.carrier](o.tracking_number || '') : '') || '';
+export const trackingUrl = (o) => o.tracking_url || (o.tracking_number && CARRIERS[o.carrier] ? CARRIERS[o.carrier](o.tracking_number) : '') || '';
 
 // One template per status change the customer hears about.
+const placed = (o, cfg = config()) => o.paid_at || o.created_at ? new Date(o.paid_at || o.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric', timeZone: cfg.timezone }) : '';
+const help = cfg => p(`Questions? Reply to this email, or call us on ${e(cfg.business.phone)}.`);
+const helpText = cfg => `Questions? Reply to this email or call ${cfg.business.phone}.`;
+const summary = o => p('<b>Your order</b>') + itemsTable(o);
+
 export function orderEmail(kind, o, cfg = config()) {
   const link = `${cfg.siteUrl}/#/order/${o.id}?t=${o.public_token}`;
   const T = {
     paid: {
       subject: `Order confirmed: ${o.number}`, pre: `Thanks ${first(o.name)}, we've received your order.`,
-      body: h1(`Thanks, ${first(o.name)}. Your order is confirmed.`) + p(`We've received your payment for order <b>${e(o.number)}</b>. We'll let you know when it goes into production${(o.items || []).some(i => i.artwork && i.artwork.later) ? ', and we will be in touch about the artwork you are supplying' : ''}.`)
+      body: h1(`Thanks, ${first(o.name)}. Your order is confirmed.`) + p(`We've received your payment for order <b>${e(o.number)}</b>${placed(o, cfg) ? `, placed on ${e(placed(o, cfg))}` : ''}. We'll let you know when we start working on it${(o.items || []).some(i => i.artwork && i.artwork.later) ? ', and we will be in touch about the artwork you are supplying' : ''}.`)
         + itemsTable(o) + p(`<b>Delivering to</b><br>${e(o.name)}<br>${e(addressText(o.shipping_address || {}))}`)
-        + (o.delivery_quote_required ? p('Some items in this order need a delivery quote. We will contact you to confirm delivery before dispatch.') : '') + btn('View your order', link),
-      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}`,
+        + (o.delivery_quote_required ? p('Some items in this order need a delivery quote. We will contact you to confirm delivery before dispatch.') : '') + btn('View your order', link) + help(cfg),
+      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.${placed(o, cfg) ? ` Placed ${placed(o, cfg)}.` : ''}\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     in_production: {
-      subject: `Your order ${o.number} is in production`, pre: 'Your order is being made now.',
-      body: h1('Your order is in production') + p(`Good news: order <b>${e(o.number)}</b> is being made in our Western Sydney factory. We'll email you tracking details as soon as it's dispatched.`) + btn('View your order', link),
-      text: `Order ${o.number} is in production. We'll email tracking details when it's dispatched.\n\n${link}`,
+      subject: `Your order ${o.number} is being processed`, pre: "We're working on your order now.",
+      body: h1("We're working on your order") + p(`Good news: order <b>${e(o.number)}</b> is now being processed and made in our Western Sydney factory. We'll email you as soon as it's dispatched.`) + summary(o) + btn('View your order', link) + help(cfg),
+      text: `Order ${o.number} is being processed. We'll email you when it's dispatched.\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     dispatched: {
-      subject: `Your order ${o.number} is on its way`, pre: `Sent with ${o.carrier || 'our courier'}.`,
-      body: h1('Your order is on its way') + p(`Order <b>${e(o.number)}</b> has been dispatched with <b>${e(o.carrier || '')}</b>.`)
-        + (o.tracking_number ? p(`Tracking number: <b>${e(o.tracking_number)}</b>`) : '') + (trackingUrl(o) ? btn('Track your delivery', trackingUrl(o)) : btn('View your order', link)),
-      text: `Order ${o.number} has been dispatched with ${o.carrier || ''}.${o.tracking_number ? `\nTracking number: ${o.tracking_number}` : ''}${trackingUrl(o) ? `\nTrack it: ${trackingUrl(o)}` : ''}\n\n${link}`,
+      subject: `Your order ${o.number} is on its way`, pre: o.carrier === 'Own delivery' ? 'Our team is delivering it.' : o.carrier && o.carrier !== 'Other' ? `Sent with ${o.carrier}.` : 'Your order has been dispatched.',
+      body: h1('Your order is on its way') + p(`Order <b>${e(o.number)}</b> has been dispatched${o.carrier === 'Own delivery' ? ' and our team will deliver it' : o.carrier && o.carrier !== 'Other' ? ` with <b>${e(o.carrier)}</b>` : ''}.`)
+        + (o.tracking_number ? p(`Tracking number: <b>${e(o.tracking_number)}</b>`) : '') + (trackingUrl(o) ? btn('Track your delivery', trackingUrl(o)) : btn('View your order', link)) + summary(o) + help(cfg),
+      text: `Order ${o.number} has been dispatched${o.carrier === 'Own delivery' ? ' and our team will deliver it' : o.carrier && o.carrier !== 'Other' ? ` with ${o.carrier}` : ''}.${o.tracking_number ? `\nTracking number: ${o.tracking_number}` : ''}${trackingUrl(o) ? `\nTrack it: ${trackingUrl(o)}` : ''}\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
+    },
+    delivered: {
+      subject: `Your order ${o.number} has been delivered`, pre: 'We hope you love it.',
+      body: h1('Your order has been delivered') + p(`Order <b>${e(o.number)}</b> has been delivered. We hope you love it. If anything isn't right, let us know and we'll sort it out.`) + summary(o) + btn('View your order', link) + help(cfg),
+      text: `Order ${o.number} has been delivered. We hope you love it. If anything isn't right, let us know.\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     cancelled: {
       subject: `Order ${o.number} has been cancelled`, pre: 'Your order has been cancelled.',
-      body: h1('Your order has been cancelled') + p(`Order <b>${e(o.number)}</b> has been cancelled.`) + p(o.paid_at ? 'Any payment you made will be refunded to your original payment method. Refunds usually appear within 5 to 10 business days.' : 'You have not been charged.') + p(`If this is unexpected, reply to this email or call us on ${e(cfg.business.phone)}.`),
-      text: `Order ${o.number} has been cancelled. ${o.paid_at ? 'Any payment will be refunded to your original payment method within 5 to 10 business days.' : 'You have not been charged.'}\nQuestions? Reply to this email or call ${cfg.business.phone}.`,
+      body: h1('Your order has been cancelled') + p(`Order <b>${e(o.number)}</b> has been cancelled.`) + p(o.paid_at ? 'Any payment you made will be refunded to your original payment method. Refunds usually appear within 5 to 10 business days.' : 'You have not been charged.') + summary(o) + p(`If this is unexpected, reply to this email or call us on ${e(cfg.business.phone)}.`),
+      text: `Order ${o.number} has been cancelled. ${o.paid_at ? 'Any payment will be refunded to your original payment method within 5 to 10 business days.' : 'You have not been charged.'}\n\n${itemsText(o)}\n\nQuestions? Reply to this email or call ${cfg.business.phone}.`,
     },
     refunded: {
       subject: `Refund for order ${o.number}`, pre: `We've refunded ${money(o.total_cents)}.`,
-      body: h1('Your refund is on its way') + p(`We've refunded order <b>${e(o.number)}</b> to your original payment method. It usually appears within 5 to 10 business days.`) + p(`Questions? Reply to this email or call us on ${e(cfg.business.phone)}.`),
-      text: `We've refunded order ${o.number} to your original payment method. It usually appears within 5 to 10 business days.`,
+      body: h1('Your refund is on its way') + p(`We've refunded order <b>${e(o.number)}</b> to your original payment method. It usually appears within 5 to 10 business days.`) + summary(o) + help(cfg),
+      text: `We've refunded order ${o.number} to your original payment method. It usually appears within 5 to 10 business days.\n\n${itemsText(o)}\n\n${helpText(cfg)}`,
     },
   }[kind];
   if (!T) return null;
   return { subject: T.subject, html: layout({ preheader: T.pre, body: T.body, cfg }), text: T.text + `\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}` };
+}
+
+// "New order received" email for the Avanti team, with everything needed to start the job.
+export function staffOrderEmail(o, cfg = config()) {
+  const a = o.shipping_address || {};
+  const admin = `${cfg.siteUrl}/#/admin/orders/${o.id}`;
+  const provider = { stripe: 'Card (Stripe)', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '';
+  const art = i => !i.artwork ? '' : i.artwork.later ? 'Artwork: customer will supply later'
+    : (i.artwork.files || []).length ? `Artwork: ${(i.artwork.files || []).map(f => `${f.side} (${f.name})`).join(', ')}` : i.artwork.design ? `Design: ${i.artwork.design}` : '';
+  const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${i.qty > 1 ? ` <span style="color:${MUTED};font-size:13px">at ${money(i.unit_cents)} each</span>` : ''}
+${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${Object.entries(i.options).map(([k, v]) => `${e(k)}: ${e(v)}`).join(' · ')}</span>` : ''}${art(i) ? `<br><span style="color:${MUTED};font-size:13px">${e(art(i))}</span>` : ''}</td>
+<td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
+  const body = h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`)
+    + btn('Open the order in the dashboard', admin)
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
+<tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
+<tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr></table>`
+    + p(`<b>Customer</b><br>${e(o.name || '')}${o.company ? `<br>${e(o.company)}` : ''}<br>${e(o.email)}${o.phone ? `<br>${e(o.phone)}` : ''}`)
+    + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '');
+  const text = `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n`
+    + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
+    + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
+    + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n\nOpen in the dashboard: ${admin}`;
+  return { subject: `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
 }
 
 // ---------- campaign blocks ----------

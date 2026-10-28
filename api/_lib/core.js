@@ -35,7 +35,15 @@ export function config() {
       marketingFrom: E('EMAIL_MARKETING_FROM', E('EMAIL_FROM', 'Avanti Print & Design <no-reply@avantiprint.com.au>')),
       replyTo: E('EMAIL_REPLY_TO', 'info@avantiprint.com.au'),
       get mode() { return this.resendKey ? 'resend' : 'log'; },   // without a key, emails are logged, not sent
+      // Order emails (confirmation, status updates, staff alert). 'false' switches them all off; staff can
+      // also switch them off instantly in the dashboard (Email log > Order emails), with no redeploy.
+      ordersEnabled: E('ORDER_EMAILS_ENABLED', 'true').trim().toLowerCase() !== 'false',
+      // When set, every outgoing email goes only to this address (for testing a preview safely).
+      testRecipient: E('EMAIL_TEST_RECIPIENT').trim().toLowerCase(),
+      // Who gets the "new order received" email. Set to 'off' for none.
+      adminNotify: E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au').trim().toLowerCase(),
     },
+    timezone: E('BUSINESS_TIMEZONE', 'Australia/Sydney').trim() || 'Australia/Sydney',
     business: {   // shown in every email footer (the Spam Act requires sender identification)
       name: E('BUSINESS_NAME', 'Avanti Print & Design'),
       abn: E('BUSINESS_ABN', ''),

@@ -1,5 +1,35 @@
 # Changelog
 
+## 28 October 2026: order emails, order status management and analytics
+
+Client request: email the customer the order details, mark orders as Processing or Dispatched
+in the dashboard, email the customer at each step, and an Analytics section with date ranges.
+Full notes, settings, testing checklist and rollback: `docs/ORDER-SYSTEM-RELEASE.md`.
+
+- New-order email to the Avanti team (`ADMIN_NOTIFICATION_EMAIL`, default info@avantiprint.com.au).
+- Order confirmation now shows unit prices, subtotal, delivery method and support contact.
+- New Delivered email. "In production" renamed "Processing" (same status underneath).
+- Dashboard: confirmation box for every status change, "Email the customer" tick box, courier
+  required but tracking optional on Dispatched, Resend buttons, emails on the order timeline,
+  search orders by customer name, order email on/off switch in Email log.
+- New Analytics section: presets and custom range, KPIs with % change, charts, top products,
+  monthly table, CSV export, Sydney time.
+- Emails never block an order, never send twice automatically, and can be switched off.
+- New settings (all optional): `ORDER_EMAILS_ENABLED`, `ADMIN_NOTIFICATION_EMAIL`,
+  `EMAIL_TEST_RECIPIENT`, `BUSINESS_TIMEZONE`. See `.env.example`.
+- Database: run `scripts/migrations/004-order-emails-analytics.sql` in Supabase. Additive only.
+
+| File | Change |
+| --- | --- |
+| `index.html` | Dashboard orders, order page, Email log switch, new Analytics section, demo mode support, "Processing" label on the customer order page |
+| `api/admin.js` | Notify flag, optional tracking, new actions: resend email, email settings, analytics |
+| `api/_lib/effects.js` | Emails after a status change: non-blocking, once only, staff alert, off switch |
+| `api/_lib/email.js` | Email content (summaries, Delivered, staff alert), test recipient redirect |
+| `api/_lib/core.js` | New settings |
+| `api/_lib/orders.js` | Dispatch error message |
+| `tests/api.test.mjs` | Updated for the new behaviour, 9 new tests |
+| New | `scripts/migrations/004-order-emails-analytics.sql`, `.env.example`, `docs/ORDER-SYSTEM-AUDIT.md`, `docs/ORDER-SYSTEM-RELEASE.md` |
+
 ## 21 October 2026: new main photo for the Corflute Insertable A-Frame
 
 - New main photo supplied by Avanti (single "Pedestrians" A-frame, square). Saved as

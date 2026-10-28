@@ -135,7 +135,7 @@ export async function createPendingOrder(d, body) {
 // ---- status changes ----
 const MESSAGES = {
   invalid_transition: 'That status change is not allowed from the order’s current status.',
-  carrier_and_tracking_required: 'Enter the carrier and tracking number to mark the order as dispatched.',
+  carrier_and_tracking_required: 'Choose a carrier to mark the order as dispatched. If a carrier is already chosen, add a tracking number too (the database update that makes it optional has not been run yet).',
   order_not_found: 'Order not found.',
 };
 export async function transition(d, orderId, to, actor, note = null, data = {}, hooks = {}) {

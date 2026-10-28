@@ -76,6 +76,8 @@
   };
   Object.assign(TABLES, OPS);
   const PAIDS = ['paid', 'in_production', 'dispatched', 'delivered'];
+  const SUBJECT = o => ({ paid: `Order confirmed: ${o.number}`, in_production: `Your order ${o.number} is being processed`, dispatched: `Your order ${o.number} is on its way`,
+    delivered: `Your order ${o.number} has been delivered`, cancelled: `Order ${o.number} has been cancelled`, refunded: `Refund for order ${o.number}` });
   function customerStats() {
     return db.t.customers.map(c => { const os = db.t.orders.filter(o => o.email === c.email && PAIDS.includes(o.status));
       const cats = new Set(); os.forEach(o => db.t.order_items.filter(i => i.order_id === o.id).forEach(i => i.category_slug && cats.add(i.category_slug)));
@@ -108,8 +110,8 @@
         actor: i === 0 ? 'customer' : i === 1 ? 'webhook:stripe' : 'admin:jo@avantiprint.com.au', note: i === 0 ? 'Checkout started' : null,
         data: s === 'dispatched' ? { carrier: o.carrier, tracking_number: o.tracking_number } : null, created_at: ago(days - i * 0.6) })));
       if (status === 'refunded') db.t.order_events.push(withDefaults('order_events', { order_id: id, from_status: 'paid', to_status: 'refunded', actor: 'webhook:stripe', note: 'Refunded in Stripe', created_at: ago(days - 2) }));
-      flow.slice(1).filter(s => s !== 'delivered').forEach((s, i) => db.t.email_log.push(withDefaults('email_log', { id: uid(), kind: 'transactional', template: 'order-' + s, to_email: email, order_id: id,
-        subject: { paid: `Order confirmed: ${o.number}`, in_production: `Your order ${o.number} is in production`, dispatched: `Your order ${o.number} is on its way` }[s], status: 'delivered', delivered_at: ago(days - i), created_at: ago(days - i * 0.6 - 0.01) })));
+      flow.slice(1).forEach((s, i) => db.t.email_log.push(withDefaults('email_log', { id: uid(), kind: 'transactional', template: 'order-' + s, to_email: email, order_id: id,
+        subject: SUBJECT(o)[s], status: 'delivered', delivered_at: ago(days - i), created_at: ago(days - i * 0.6 - 0.01) })));
       return o;
     };
     const banner = ['pull-up-banner', 2, 12000, {}, { files: [{ side: 'Artwork', name: 'cafe-banner-final.pdf', path: null, info: 'Print-ready PDF' }] }];
@@ -342,6 +344,32 @@
   const audienceOf = segId => { const all = eligible(); if (!segId) return all; const s = db.t.segments.find(x => x.id === segId); return s ? all.filter(c => segMatch(s.rules, c)) : all; };
   const logMail = row => db.t.email_log.push(withDefaults('email_log', { id: crypto.randomUUID(), status: 'logged', provider: 'demo', created_at: now(), ...row }));
   const who = 'admin:' + USER;
+  const emailsOn = () => { const r = db.t.site_settings.find(x => x.key === 'order_emails'); return !(r && r.value === false); };
+  // the same figures as admin_order_analytics in the database, worked out in the browser for the demo
+  function demoAnalytics(b) {
+    const tz = 'Australia/Sydney', day = iso => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+    const add = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    const from = b.from, to = b.to; if (!from || !to || from > to) bad('Choose a valid date range.');
+    const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1, pfrom = add(from, -days), pto = add(from, -1), grain = days <= 62 ? 'day' : 'month', excl = b.exclude_cancelled !== false;
+    const paid = db.t.orders.filter(o => o.paid_at).map(o => ({ ...o, d: day(o.paid_at) }));
+    const first = {}; paid.forEach(o => { if (!first[o.email] || o.paid_at < first[o.email]) first[o.email] = o.paid_at; });
+    const counted = (a, z) => paid.filter(o => o.d >= a && o.d <= z && !(excl && ['cancelled', 'refunded'].includes(o.status)));
+    const itemsOf = o => db.t.order_items.filter(i => i.order_id === o.id);
+    const kpi = (a, z) => { const os = counted(a, z), rev = os.reduce((t, o) => t + o.total_cents, 0), emails = [...new Set(os.map(o => o.email))];
+      return { orders: os.length, revenue_cents: rev, items: os.reduce((t, o) => t + itemsOf(o).reduce((u, i) => u + i.qty, 0), 0), aov_cents: os.length ? Math.round(rev / os.length) : 0,
+        new_customers: emails.filter(e => day(first[e]) >= a).length, returning_customers: emails.filter(e => day(first[e]) < a).length }; };
+    const cur = counted(from, to), month = s => s.slice(0, 7) + '-01', buckets = [];
+    for (let s = grain === 'day' ? from : month(from); s <= to; s = grain === 'day' ? add(s, 1) : (() => { const d = new Date(s + 'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 10); })()) buckets.push(s);
+    const months = []; for (let s = month(from); s <= to; ) { months.push(s); const d = new Date(s + 'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() + 1); s = d.toISOString().slice(0, 10); }
+    const sum = os => ({ orders: os.length, revenue_cents: os.reduce((t, o) => t + o.total_cents, 0) });
+    const top = {}; cur.forEach(o => itemsOf(o).forEach(i => { const t = top[i.product_slug] = top[i.product_slug] || { slug: i.product_slug, name: i.name, qty: 0, revenue_cents: 0 }; t.qty += i.qty; t.revenue_cents += i.line_cents; }));
+    const st = {}; paid.filter(o => o.d >= from && o.d <= to).forEach(o => { st[o.status] = (st[o.status] || 0) + 1; });
+    return { from, to, tz, grain, exclude_cancelled: excl, previous_from: pfrom, previous_to: pto, current: kpi(from, to), previous: kpi(pfrom, pto),
+      series: buckets.map(s => ({ bucket: s, ...sum(cur.filter(o => (grain === 'day' ? o.d : month(o.d)) === s)) })),
+      monthly: months.map(m => { const os = cur.filter(o => month(o.d) === m), x = sum(os); return { month: m, ...x, items: os.reduce((t, o) => t + itemsOf(o).reduce((u, i) => u + i.qty, 0), 0), aov_cents: os.length ? Math.round(x.revenue_cents / os.length) : 0 }; }),
+      by_status: Object.entries(st).map(([status, orders]) => ({ status, orders })).sort((a, z) => z.orders - a.orders),
+      top_products: Object.values(top).sort((a, z) => z.qty - a.qty || z.revenue_cents - a.revenue_cents).slice(0, 10) };
+  }
   function previewHtml(c) {
     const e = s => String(s == null ? '' : s).replace(/[&<>"]/g, x => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]));
     const body = (c.blocks || []).map(b => b.type === 'heading' ? `<h1 style="font-size:22px;margin:0 0 14px">${e(b.text).replace(/\{\{\s*first_name\s*\}\}/g, 'Jo')}</h1>`
@@ -359,13 +387,29 @@
         const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
         if (o.status === b.to) return { changed: false, status: o.status };
         if (!(NEXT_OK[o.status] || []).includes(b.to)) bad('That status change is not allowed from the order’s current status.');
-        if (b.to === 'dispatched' && !(b.carrier && b.tracking_number)) bad('Enter the carrier and tracking number to mark the order as dispatched.');
+        if (b.to === 'dispatched' && !b.carrier) bad('Choose a carrier to mark the order as dispatched.');
         const from = o.status; o.status = b.to; o[b.to + '_at'] = now();
-        if (b.to === 'dispatched') Object.assign(o, { carrier: b.carrier, tracking_number: b.tracking_number, tracking_url: b.tracking_url || null });
-        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: from, to_status: b.to, actor: who, note: b.note || null, data: b.to === 'dispatched' ? { carrier: b.carrier, tracking_number: b.tracking_number } : null, created_at: now() }));
-        if (b.to !== 'delivered' && !(b.to === 'cancelled' && from === 'pending_payment'))
-          logMail({ kind: 'transactional', template: 'order-' + b.to, to_email: o.email, order_id: o.id, subject: { in_production: `Your order ${o.number} is in production`, dispatched: `Your order ${o.number} is on its way`, cancelled: `Order ${o.number} has been cancelled`, refunded: `Refund for order ${o.number}`, paid: `Order confirmed: ${o.number}` }[b.to] });
+        if (b.to === 'dispatched') Object.assign(o, { carrier: b.carrier, tracking_number: b.tracking_number || null, tracking_url: b.tracking_url || null });
+        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: from, to_status: b.to, actor: who, note: b.note || null, data: b.to === 'dispatched' ? { carrier: b.carrier, tracking_number: b.tracking_number || null } : null, created_at: now() }));
+        const sysNote = note => db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: 'system', note, created_at: now() }));
+        if (!(b.to === 'cancelled' && from === 'pending_payment')) {
+          if (!emailsOn()) sysNote('Order emails are switched off, so no email was sent.');
+          else if (b.notify === false) sysNote('Customer was not emailed about this change.');
+          else logMail({ kind: 'transactional', template: 'order-' + b.to, to_email: o.email, order_id: o.id, subject: SUBJECT(o)[b.to] });
+        }
         return { changed: true, from, status: b.to }; }
+      case 'order-resend-email': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
+        if (!emailsOn()) bad('Order emails are switched off. Switch them on in Email log first.');
+        const staff = b.which === 'staff';
+        if (!staff && o.status === 'pending_payment') bad('This checkout has not been paid, so there is no order email to send.');
+        const to = staff ? 'info@avantiprint.com.au' : o.email;
+        logMail({ kind: 'transactional', template: staff ? 'order-new-staff' : 'order-' + o.status, to_email: to, order_id: o.id, subject: staff ? `New order ${o.number}` : SUBJECT(o)[o.status] });
+        db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `${staff ? 'New-order email to staff' : 'Status email to the customer'} resent (logged).`, created_at: now() }));
+        return { status: 'logged', to }; }
+      case 'email-settings': {
+        if (typeof b.order_emails === 'boolean') upsertRows('site_settings', [{ key: 'order_emails', value: b.order_emails }], 'key');
+        return { sending: false, order_emails_env: true, order_emails_switch: emailsOn(), test_recipient: null, staff_email: 'info@avantiprint.com.au', timezone: 'Australia/Sydney' }; }
+      case 'analytics': return demoAnalytics(b);
       case 'order-note': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
         db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: b.note, created_at: now() })); return { ok: true }; }
       case 'campaign-test': { const c = b.campaign || db.t.campaigns.find(x => x.id === b.campaign_id) || {};
@@ -1185,6 +1229,19 @@ textarea.gya-in { resize: vertical; min-height: 44px; }
 .gya-statc span { font-family: var(--g-mono); font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--g-ink3); }
 .gya-statc b { font-size: 1.6rem; line-height: 1.15; }
 .gya-statc small { color: var(--g-ink3); font-size: .78rem; }
+.gya-statc small.gya-up { color: #1a7f45; } .gya-statc small.gya-down { color: #b3261e; }
+.gya-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.gya-stats-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 700px) { .gya-stats-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.gya-ch-grid { stroke: var(--g-line); stroke-width: 1; } .gya-ch-base { stroke: #cfcac2; stroke-width: 1; }
+.gya-ch-ax { font: 11px var(--g-mono); fill: var(--g-ink3); }
+.gya-ch-bar path { fill: var(--g-red); } .gya-ch-bar:hover path { fill: #8f0b21; }
+.gya-hbars { display: flex; flex-direction: column; gap: 10px; margin: 0 0 10px; }
+.gya-hbar { display: grid; grid-template-columns: 130px 1fr 40px; align-items: center; gap: 10px; font-size: .88rem; }
+.gya-hbar i { display: block; height: 8px; background: var(--g-paper); border-radius: 4px; overflow: hidden; } .gya-hbar em { display: block; height: 100%; background: var(--g-red); border-radius: 4px; }
+.gya-hbar b { text-align: right; } .gya-hbar-thin { grid-template-columns: 1fr; margin-top: 6px; } .gya-hbar-thin i { height: 4px; }
+.gya-afilters .gya-check { margin: 0 6px; }
+.gya-tl-mail::before { background: #9a958d !important; }
 .gya-st { display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; vertical-align: middle; }
 .gya-st-ok { color: #1a7f45; background: #effaf3; } .gya-st-info { color: #2456a6; background: #eef4ff; } .gya-st-wait { color: #9a6200; background: #fff8e8; }
 .gya-st-done { color: #3d3a42; background: #f1efec; } .gya-st-off { color: #77737c; background: #f6f5f3; } .gya-st-bad { color: #b3261e; background: #fff1f0; }
@@ -2415,7 +2472,7 @@ const GYA = (() => {
       if (/sign in again/i.test(e.message)) { clearSession(); location.hash = '#/login?next=' + encodeURIComponent(location.hash); } }
   }
   // sidebar grouped like an operator portal; sections can set their own group
-  const NAV_GROUPS = { overview: 'Overview', orders: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
+  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
     customers: 'Customers', campaigns: 'Marketing', segments: 'Marketing', automations: 'Marketing', emaillog: 'Marketing',
     blog: 'Content', pages: 'Content', content: 'Content', seo: 'Content', media: 'Content', settings: 'Account' };
   function navHtml(current) {
@@ -2969,7 +3026,7 @@ const GYA = (() => {
   const dt = s => s ? new Date(s).toLocaleDateString('en-AU') : '';
   const dtt = s => s ? new Date(s).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '–';
-  const ST = { pending_payment: ['Awaiting payment', 'wait'], paid: ['Paid', 'ok'], in_production: ['In production', 'info'], dispatched: ['Dispatched', 'info'],
+  const ST = { pending_payment: ['Awaiting payment', 'wait'], paid: ['Paid', 'ok'], in_production: ['Processing', 'info'], dispatched: ['Dispatched', 'info'],
     delivered: ['Delivered', 'done'], cancelled: ['Cancelled', 'off'], refunded: ['Refunded', 'off'],
     draft: ['Draft', 'off'], scheduled: ['Scheduled', 'info'], sending: ['Sending', 'wait'], sent: ['Sent', 'ok'], failed: ['Failed', 'bad'],
     subscribed: ['Subscribed', 'ok'], unsubscribed: ['Unsubscribed', 'off'], not_subscribed: ['Not subscribed', 'off'], suppressed: ['Suppressed', 'bad'],
@@ -2981,7 +3038,7 @@ const GYA = (() => {
   const PAGE = 50;
   const empty = (msg) => `<p class="gya-muted" style="padding:18px 4px">${msg}</p>`;
   const card = (label, value, sub = '') => `<div class="gya-statc"><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
-  const orderRow = o => `<tr class="gya-click" data-href="#/admin/orders/${o.id}"><td><a href="#/admin/orders/${o.id}">${esc(o.number)}</a></td><td>${esc(o.email)}</td><td>${pill(o.status)}</td><td>${$c(o.total_cents)}</td><td>${dt(o.created_at)}</td></tr>`;
+  const orderRow = o => `<tr class="gya-click" data-href="#/admin/orders/${o.id}"><td><a href="#/admin/orders/${o.id}">${esc(o.number)}</a></td><td>${o.name ? `${esc(o.name)}<div class="gya-muted gya-small">${esc(o.email)}</div>` : esc(o.email)}</td><td>${pill(o.status)}</td><td>${$c(o.total_cents)}</td><td>${dt(o.created_at)}</td></tr>`;
   const clickRows = root => qsa('tr[data-href]', root).forEach(tr => tr.onclick = e => { if (!e.target.closest('a,button,input')) location.hash = tr.dataset.href; });
 
   /* ---------------- Overview ---------------- */
@@ -2994,7 +3051,7 @@ const GYA = (() => {
       customers: c.length, subscribers: c.filter(x => x.marketing_status === 'subscribed' && !x.suppressed).length, active_products: p.filter(x => x.published).length };
   }
   G.section({ id: 'overview', label: 'Dashboard', order: 1, async render(main) {
-    const [s, recent] = await Promise.all([stats(), rest('orders?select=id,number,email,status,total_cents,created_at&status=neq.pending_payment&order=created_at.desc&limit=8')]);
+    const [s, recent] = await Promise.all([stats(), rest('orders?select=id,number,name,email,status,total_cents,created_at&status=neq.pending_payment&order=created_at.desc&limit=8')]);
     main.innerHTML = head('Dashboard', 'The whole operation at a glance.') + `
       <div class="gya-stats">${card('Revenue (paid)', $c(s.revenue_paid_cents))}${card('Orders', s.orders)}${card('Customers', s.customers)}${card('Active products', s.active_products)}
         ${card('Open orders', s.open_orders, 'paid, not yet dispatched')}${card('Subscribers', s.subscribers, 'can receive marketing email')}${card('Awaiting payment', s.awaiting_payment, 'checkouts not yet paid')}</div>
@@ -3010,20 +3067,20 @@ const GYA = (() => {
       <div class="gya-filters gya-ofilters">
         <select class="gya-in" id="ofStatus"><option value="placed">All placed orders</option>${['paid', 'in_production', 'dispatched', 'delivered', 'cancelled', 'refunded'].map(s => `<option value="${s}">${ST[s][0]}</option>`).join('')}<option value="pending_payment">Awaiting payment (unfinished checkouts)</option><option value="all">Everything</option></select>
         <label class="gya-inline">From <input class="gya-in" type="date" id="ofFrom"></label><label class="gya-inline">To <input class="gya-in" type="date" id="ofTo"></label>
-        <input class="gya-in gya-search" id="ofQ" placeholder="Search order number or email"></div>
+        <input class="gya-in gya-search" id="ofQ" placeholder="Search order number, name or email"></div>
       <section class="gya-card gya-pad0"><div id="ofList"></div></section>`;
     qs('#ofStatus', main).value = of.status; qs('#ofFrom', main).value = of.from; qs('#ofTo', main).value = of.to; qs('#ofQ', main).value = of.q;
     let offset = 0, rows = [];
     const draw = async (more) => {
       if (!more) { offset = 0; rows = []; }
-      let q = `select=id,number,email,status,total_cents,created_at&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
+      let q = `select=id,number,name,email,status,total_cents,created_at&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
       if (of.status === 'placed') q += '&status=neq.pending_payment'; else if (of.status !== 'all') q += `&status=eq.${of.status}`;
       if (of.from) q += `&created_at=gte.${enc(new Date(of.from + 'T00:00:00').toISOString())}`;
       if (of.to) { const t = new Date(of.to + 'T00:00:00'); t.setDate(t.getDate() + 1); q += `&created_at=lt.${enc(t.toISOString())}`; }
       const term = of.q.replace(/[(),*%]/g, ' ').trim();
-      if (term) q += `&or=(number.ilike.*${enc(term)}*,email.ilike.*${enc(term)}*)`;
+      if (term) q += `&or=(number.ilike.*${enc(term)}*,email.ilike.*${enc(term)}*,name.ilike.*${enc(term)}*)`;
       const got = await rest(`orders?${q}`); const hasMore = got.length > PAGE; rows = rows.concat(got.slice(0, PAGE)); offset += PAGE;
-      qs('#ofList', main).innerHTML = rows.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${rows.map(orderRow).join('')}</tbody></table></div>
+      qs('#ofList', main).innerHTML = rows.length ? `<p class="gya-muted gya-small" style="padding:10px 14px 0;margin:0">Showing ${rows.length}${hasMore ? '+' : ''} order${rows.length === 1 ? '' : 's'}</p><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${rows.map(orderRow).join('')}</tbody></table></div>
         ${hasMore ? '<p style="text-align:center;padding:12px"><button class="gya-btn gya-btn-line" id="ofMore">Load more</button></p>' : ''}` : empty('No orders match these filters.');
       clickRows(main); const m = qs('#ofMore', main); if (m) m.onclick = () => draw(true);
     };
@@ -3032,20 +3089,38 @@ const GYA = (() => {
     await draw();
   }
 
-  const NEXT = { pending_payment: [['cancelled', 'Cancel checkout', 'line']], paid: [['in_production', 'Start production', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
-    in_production: [['dispatched', 'Mark as dispatched', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
-    dispatched: [['delivered', 'Mark delivered', 'red'], ['refunded', 'Mark refunded', 'line']], delivered: [['refunded', 'Mark refunded', 'line']] };
+  const NEXT = { pending_payment: [['cancelled', 'Cancel checkout', 'line']], paid: [['in_production', 'Mark as Processing', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
+    in_production: [['dispatched', 'Mark as Dispatched', 'red'], ['cancelled', 'Cancel order', 'line'], ['refunded', 'Mark refunded', 'line']],
+    dispatched: [['delivered', 'Mark as Delivered', 'red'], ['refunded', 'Mark refunded', 'line']], delivered: [['refunded', 'Mark refunded', 'line']] };
+  // what each change does, shown in the confirmation box before anything is saved
+  const MOVE_INFO = {
+    in_production: ['Mark as Processing', 'The order moves to Processing.', 'an email saying their order is being processed'],
+    dispatched: ['Mark as Dispatched', 'The order moves to Dispatched.', 'an email saying their order is on its way, with tracking if you add it'],
+    delivered: ['Mark as Delivered', 'The order moves to Delivered.', 'an email saying their order has been delivered'],
+    cancelled: ['Cancel order', 'The order is cancelled. Remember to refund the customer in Stripe or PayPal.', 'an email saying their order has been cancelled'],
+    refunded: ['Mark refunded', 'Only do this once the refund has been issued in Stripe or PayPal.', 'an email confirming their refund'],
+  };
+  const MAIL = { 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
+    'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team' };
+  const mailName = t => MAIL[t] || String(t || '').replace('order-', '').replace('_', ' ');
   async function orderDetail(main, id) {
     const [o] = await rest(`orders?select=*&id=eq.${enc(id)}`);
     if (!o) { main.innerHTML = head('Order not found') + '<p><a class="gya-link" href="#/admin/orders">Back to orders</a></p>'; return; }
     const [items, events, mails] = await Promise.all([rest(`order_items?select=*&order_id=eq.${enc(id)}&order=position`), rest(`order_events?select=*&order_id=eq.${enc(id)}&order=created_at`),
-      rest(`email_log?select=template,status,created_at,bounce_reason&order_id=eq.${enc(id)}&order=created_at`)]);
+      rest(`email_log?select=template,to_email,status,created_at,bounce_reason,error&order_id=eq.${enc(id)}&order=created_at`)]);
     const a = o.shipping_address || {}, acts = NEXT[o.status] || [];
     const who = e => e.startsWith('admin:') ? esc(e.slice(6)) : e === 'customer' ? 'Customer' : e.startsWith('webhook:') ? `${esc(e.slice(8)[0].toUpperCase() + e.slice(9))} (automatic)` : e === 'paypal:capture' ? 'PayPal (automatic)' : e === 'system' ? 'System' : esc(e);
     const refLink = o.provider === 'stripe' && o.provider_ref ? `https://dashboard.stripe.com/search?query=${enc(o.provider_ref)}` : o.provider === 'paypal' && o.provider_ref ? `https://www.paypal.com/activity/payment/${enc(o.provider_ref)}` : '';
+    const mailPill = m => pill(m.status === 'delivered' ? 'delivered_mail' : m.status);
+    // status changes, notes and emails in one timeline, oldest first
+    const timeline = events.map(e => ({ at: e.created_at, html: `<li><b>${e.from_status && e.from_status !== e.to_status ? `${ST[e.from_status] ? ST[e.from_status][0] : e.from_status} → ${ST[e.to_status] ? ST[e.to_status][0] : e.to_status}` : e.from_status === e.to_status ? 'Note' : ST[e.to_status] ? ST[e.to_status][0] : e.to_status}</b>
+        <span class="gya-muted">${dtt(e.created_at)} · ${who(e.actor)}</span>${e.note ? `<p>${esc(e.note)}</p>` : ''}${e.data && e.data.carrier && e.to_status === 'dispatched' ? `<p>${esc(e.data.carrier)}${e.data.tracking_number ? ` · ${esc(e.data.tracking_number)}` : ' · no tracking number'}</p>` : ''}</li>` }))
+      .concat(mails.map(m => ({ at: m.created_at, html: `<li class="gya-tl-mail"><b>Email: ${esc(mailName(m.template))} ${mailPill(m)}</b><span class="gya-muted">${dtt(m.created_at)} · to ${esc(m.to_email || '')}</span>${m.error || m.bounce_reason ? `<p class="gya-warn-t">${esc(m.error || m.bounce_reason)}</p>` : ''}</li>` })))
+      .sort((x, y) => new Date(x.at) - new Date(y.at)).map(x => x.html).join('');
+    const canResend = o.status !== 'pending_payment';
     main.innerHTML = head(`${esc(o.number)} ${pill(o.status)}`, `Placed ${dtt(o.created_at)} · <a class="gya-link" href="#/admin/orders">Back to orders</a>`,
       acts.map(([to, label, kind]) => `<button class="gya-btn ${kind === 'red' ? 'gya-btn-red' : 'gya-btn-line'}" data-to="${to}">${label}</button>`).join('')) + `
-      <div id="odForm"></div>
+      <div id="odMailState"></div><div id="odForm"></div>
       <div class="gya-grid2">
         <div>
           <section class="gya-card"><h3>Items</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Product</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead><tbody>
@@ -3055,8 +3130,7 @@ const GYA = (() => {
               <td>${i.qty}</td><td>${$c(i.unit_cents)}</td><td>${$c(i.line_cents)}</td></tr>`).join('')}
             <tr><td colspan="3">Delivery${o.delivery_method ? `<div class="gya-muted">${esc(o.delivery_method)}</div>` : ''}${o.delivery_quote_required ? '<div class="gya-warn-t">Some items need a courier quote</div>' : ''}</td><td>${$c(o.delivery_cents)}</td></tr>
             <tr><td colspan="3"><b>Total (AUD)</b><div class="gya-muted">Includes GST of ${$c(o.gst_cents)}</div></td><td><b>${$c(o.total_cents)}</b></td></tr></tbody></table></div></section>
-          <section class="gya-card"><h3>Timeline</h3><ol class="gya-timeline">${events.map(e => `<li><b>${e.from_status && e.from_status !== e.to_status ? `${ST[e.from_status] ? ST[e.from_status][0] : e.from_status} → ${ST[e.to_status] ? ST[e.to_status][0] : e.to_status}` : e.from_status === e.to_status ? 'Note' : ST[e.to_status] ? ST[e.to_status][0] : e.to_status}</b>
-              <span class="gya-muted">${dtt(e.created_at)} · ${who(e.actor)}</span>${e.note ? `<p>${esc(e.note)}</p>` : ''}${e.data && e.data.tracking_number ? `<p>${esc(e.data.carrier)} · ${esc(e.data.tracking_number)}</p>` : ''}</li>`).join('')}</ol>
+          <section class="gya-card"><h3>Timeline</h3><ol class="gya-timeline">${timeline}</ol>
             <div class="gya-row" style="margin-top:10px"><input class="gya-in" id="odNote" placeholder="Add an internal note (not sent to the customer)"><button class="gya-btn gya-btn-line" id="odNoteBtn">Add note</button></div></section>
         </div>
         <div>
@@ -3066,32 +3140,156 @@ const GYA = (() => {
             ${o.customer_id ? `<a class="gya-link" href="#/admin/customers/${o.customer_id}">Customer record →</a>` : ''}</section>
           <section class="gya-card"><h3>Payment</h3><dl class="gya-dl"><dt>Provider</dt><dd>${esc({ stripe: 'Stripe', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '')}</dd>
             <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
-            <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.tracking_number ? `<dt>Tracking</dt><dd>${esc(o.carrier)} · ${esc(o.tracking_number)}</dd>` : ''}</dl>
+            <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
             ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
-          <section class="gya-card"><h3>Emails to the customer</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(String(m.template || '').replace('order-', '').replace('_', ' '))} ${pill(m.status === 'delivered' ? 'delivered_mail' : m.status)} <span class="gya-muted">${dtt(m.created_at)}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}</section>
+          <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
+            ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}</div>
+              <p class="gya-muted gya-small">Each email goes out once automatically. Resend sends it again, even if it went before.</p>` : ''}</section>
         </div></div>`;
+    // let staff know before they act if emails won't go out (never blocks the page)
+    server('email-settings', {}).then(st => { const box = qs('#odMailState', main); if (!box || !st) return;
+      const msg = !st.order_emails_env || !st.order_emails_switch ? 'Order emails are switched off, so status changes will not email the customer. Turn them back on in Email log.'
+        : !st.sending ? 'The email service is not connected yet, so emails are recorded in the log but not delivered.' : st.test_recipient ? `Test mode: every email goes to ${esc(st.test_recipient)} instead of the customer.` : '';
+      if (msg) box.innerHTML = `<p class="gya-warn" style="margin:0 0 14px">${msg}</p>`; }).catch(() => {});
     const doMove = async (btn, to, extra = {}) => busy(btn, async () => { await server('order-transition', { order_id: o.id, to, ...extra }); toast(`Order ${o.number}: ${ST[to][0]}`); orderDetail(main, id); });
     qsa('[data-to]', main).forEach(b => b.onclick = () => {
       const to = b.dataset.to, form = qs('#odForm', main);
-      if (to === 'dispatched') {
-        form.innerHTML = ui.card('Mark as dispatched', `<div class="gya-grid2">${ui.field('Carrier', ui.select('carrier', CARRIERS, 'Australia Post'))}${ui.field('Tracking number', ui.text('tracking', '', 'autocomplete="off"'))}</div>
-          ${ui.field('Tracking link', ui.text('turl', '', 'placeholder="https://..."'), 'Only needed for “Other” or your own delivery. For the listed carriers the link is filled in automatically.')}${ui.field('Note (optional)', ui.text('note'))}
-          <div class="gya-row"><button class="gya-btn gya-btn-red" id="odDispatch">Mark dispatched and email the customer</button><button class="gya-btn gya-btn-line" id="odCancel">Cancel</button></div>`);
-        qs('#odCancel', form).onclick = () => { form.innerHTML = ''; };
-        qs('#odDispatch', form).onclick = e => { const v = n => qs(`[name=${n}]`, form).value.trim();
-          if (!v('tracking')) { toast('Enter the tracking number', true); return; }
-          doMove(e.target, 'dispatched', { carrier: v('carrier'), tracking_number: v('tracking'), tracking_url: v('turl'), note: v('note') }); };
-        qs('[name=tracking]', form).focus(); return;
-      }
-      const msg = { cancelled: o.status === 'pending_payment' ? 'Cancel this unfinished checkout? The customer is not emailed.' : 'Cancel this order and email the customer? Remember to refund them in Stripe or PayPal.',
-        refunded: 'Mark this order as refunded and email the customer? Make sure the refund has been issued in Stripe or PayPal.' }[to];
-      if (msg && !confirm(msg)) return;
-      doMove(b, to, { note: to === 'cancelled' || to === 'refunded' ? (prompt('Reason (optional, for the timeline):') || '') : '' });
+      const silent = to === 'cancelled' && o.status === 'pending_payment';   // unfinished checkout: nobody to email
+      const [title, what, mail] = silent ? ['Cancel checkout', 'This unfinished checkout is cancelled. The customer never paid, so they are not emailed.', ''] : MOVE_INFO[to];
+      form.innerHTML = ui.card(esc(title) + ` <span class="gya-muted" style="font-weight:400">· ${esc(o.number)}</span>`, `<p>${what}</p>
+        ${to === 'dispatched' ? `<div class="gya-grid2">${ui.field('Courier', ui.select('carrier', CARRIERS, o.carrier || 'Australia Post'))}${ui.field('Tracking number (optional)', ui.text('tracking', '', 'autocomplete="off"'))}</div>
+          ${ui.field('Tracking link (optional)', ui.text('turl', '', 'placeholder="https://..."'), 'Only needed for “Other” or your own delivery. For the listed couriers the link is made from the tracking number.')}` : ''}
+        ${ui.field('Note for the timeline (optional)', ui.text('note', '', 'placeholder="The customer does not see this"'))}
+        ${silent ? '' : `<div class="gya-checks">${ui.check('notify', true, `Email the customer: ${mail}`)}</div>`}
+        <div class="gya-row"><button class="gya-btn gya-btn-red" id="odGo">Confirm: ${esc(title)}</button><button class="gya-btn gya-btn-line" id="odCancel">Go back</button></div>`, 'id="odConfirm"');
+      qs('#odCancel', form).onclick = () => { form.innerHTML = ''; };
+      qs('#odGo', form).onclick = e => { const v = n => { const el = qs(`[name=${n}]`, form); return el ? el.value.trim() : ''; };
+        const extra = { note: v('note') }, tick = qs('[name=notify]', form);
+        if (tick) extra.notify = tick.checked;
+        if (to === 'dispatched') {
+          const turl = v('turl'); if (turl && !/^https:\/\//.test(turl)) { toast('The tracking link must start with https://', true); return; }
+          Object.assign(extra, { carrier: v('carrier'), tracking_number: v('tracking'), tracking_url: turl });
+        }
+        doMove(e.target, to, extra); };
+      form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const first = qs(to === 'dispatched' ? '[name=tracking]' : '#odGo', form); if (first) first.focus();
+    });
+    qsa('[data-resend]', main).forEach(b => b.onclick = () => {
+      const staff = b.dataset.resend === 'staff';
+      if (!confirm(staff ? 'Send the new-order alert to the Avanti team again?' : `Send the ${mailName('order-' + o.status).toLowerCase()} email to ${o.email} again?`)) return;
+      busy(b, async () => { const r = await server('order-resend-email', { order_id: o.id, which: staff ? 'staff' : 'customer' });
+        toast(r.status === 'failed' ? 'The email could not be sent. See the timeline for details.' : `Email ${r.status === 'logged' ? 'recorded' : 'sent'} to ${r.to}`, r.status === 'failed'); orderDetail(main, id); });
     });
     qs('#odNoteBtn', main).onclick = e => { const n = qs('#odNote', main).value.trim(); if (!n) return; busy(e.target, async () => { await server('order-note', { order_id: o.id, note: n }); orderDetail(main, id); }); };
     qsa('[data-dl]', main).forEach(b => b.onclick = () => G.download('artwork', b.dataset.dl).catch(e => toast(e.message, true)));
   }
   G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
+
+  /* ---------------- Analytics ----------------
+     Figures come from the database in one call (admin_order_analytics), grouped by the date each
+     order was paid in Sydney time, so a month here is the same month as in the accounts. */
+  const TZ = 'Australia/Sydney';
+  const ymd = d => d.toISOString().slice(0, 10);
+  const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return ymd(d); };
+  const todayTz = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const PRESETS = [['today', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['year', 'This year'], ['custom', 'Custom range']];
+  function presetRange(k) {
+    const t = todayTz(), [y, m] = t.split('-').map(Number);
+    switch (k) {
+      case 'today': return [t, t];
+      case '7': return [addDays(t, -6), t];
+      case '30': return [addDays(t, -29), t];
+      case 'month': return [t.slice(0, 8) + '01', t];
+      case 'lastmonth': { const first = ymd(new Date(Date.UTC(m === 1 ? y - 1 : y, m === 1 ? 11 : m - 2, 1))); return [first, addDays(t.slice(0, 8) + '01', -1)]; }
+      case 'year': return [`${y}-01-01`, t];
+      default: return null;
+    }
+  }
+  const af = { preset: '30', from: '', to: '', excl: true };
+  const dShort = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const dLong = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const mLabel = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-AU', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  function change(cur, prev) {
+    if (!prev && !cur) return '<small class="gya-muted">No change</small>';
+    if (!prev) return '<small class="gya-muted">New this period</small>';
+    const p = Math.round((cur - prev) / prev * 100);
+    return `<small class="${p > 0 ? 'gya-up' : p < 0 ? 'gya-down' : 'gya-muted'}">${p > 0 ? '▲' : p < 0 ? '▼' : ''} ${Math.abs(p)}% vs previous period</small>`;
+  }
+  const kcard = (label, value, sub) => `<div class="gya-statc"><span>${label}</span><b>${value}</b>${sub}</div>`;
+  // one measure per chart (never two scales on one chart); bars rounded at the top, hover shows the figure
+  function barChart(series, key, fmt, grain) {
+    const W = 480, H = 190, padL = 46, padB = 24, padT = 10, n = series.length || 1;
+    const max = Math.max(1, ...series.map(s => s[key])), nice = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p) * p; })();
+    const slot = (W - padL) / n, bw = Math.max(2, Math.min(36, slot - 2)), y = v => H - padB - (v / nice) * (H - padB - padT);
+    const every = Math.ceil(n / 6), lab = s => grain === 'month' ? mLabel(s.bucket) : dShort(s.bucket);
+    const grid = [0, 0.5, 1].map(f => `<line x1="${padL}" x2="${W}" y1="${y(nice * f)}" y2="${y(nice * f)}" class="gya-ch-grid"/><text x="${padL - 6}" y="${y(nice * f) + 4}" text-anchor="end" class="gya-ch-ax">${fmt(nice * f, true)}</text>`).join('');
+    const bars = series.map((s, i) => { const x = padL + i * slot + (slot - bw) / 2, h = H - padB - y(s[key]), r = Math.min(4, bw / 2, h);
+      const path = h > 0 ? `M${x},${H - padB} v${-(h - r)} q0,${-r} ${r},${-r} h${bw - 2 * r} q${r},0 ${r},${r} v${h - r} z` : '';
+      return `<g class="gya-ch-bar"><rect x="${padL + i * slot}" y="${padT}" width="${slot}" height="${H - padB - padT}" fill="transparent"/>${path ? `<path d="${path}"/>` : ''}<title>${lab(s)}: ${fmt(s[key])}</title></g>`
+        + (i % every === 0 ? `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle" class="gya-ch-ax">${lab(s)}</text>` : ''); }).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" class="gya-chart" role="img" aria-label="Bar chart">${grid}<line x1="${padL}" x2="${W}" y1="${H - padB}" y2="${H - padB}" class="gya-ch-base"/>${bars}</svg>`;
+  }
+  const money0 = (c, short) => short && c >= 100000 ? '$' + Math.round(c / 100000) + 'k' : short ? '$' + Math.round(c / 100) : $c(c);
+  function analyticsCsv(x) {
+    const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v), $ = c => (c / 100).toFixed(2);
+    const rows = [['Avanti analytics', `${x.from} to ${x.to}`], ['Timezone', x.tz], ['Cancelled and refunded orders', x.exclude_cancelled ? 'excluded' : 'included'], [],
+      ['Measure', 'This period', `Previous period (${x.previous_from} to ${x.previous_to})`],
+      ['Orders', x.current.orders, x.previous.orders], ['Revenue (AUD)', $(x.current.revenue_cents), $(x.previous.revenue_cents)],
+      ['Average order value (AUD)', $(x.current.aov_cents), $(x.previous.aov_cents)], ['Items sold', x.current.items, x.previous.items],
+      ['New customers', x.current.new_customers, x.previous.new_customers], ['Returning customers', x.current.returning_customers, x.previous.returning_customers], [],
+      [x.grain === 'month' ? 'Month' : 'Date', 'Orders', 'Revenue (AUD)'], ...x.series.map(s => [s.bucket, s.orders, $(s.revenue_cents)]), [],
+      ['Month', 'Orders', 'Revenue (AUD)', 'Average order value (AUD)', 'Items sold'], ...x.monthly.map(m => [m.month.slice(0, 7), m.orders, $(m.revenue_cents), $(m.aov_cents), m.items]), [],
+      ['Status', 'Orders'], ...x.by_status.map(s => [(ST[s.status] || [s.status])[0], s.orders]), [],
+      ['Top product', 'Qty sold', 'Revenue (AUD)'], ...x.top_products.map(p => [p.name, p.qty, $(p.revenue_cents)])];
+    return rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  G.section({ id: 'analytics', label: 'Analytics', order: 2, async render(main) {
+    main.innerHTML = head('Analytics', 'Paid orders, counted on the day they were paid (Sydney time). Unfinished checkouts are never counted.') + `
+      <div class="gya-filters gya-row gya-afilters">
+        <select class="gya-in" id="afPreset" style="width:auto">${PRESETS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+        <label class="gya-inline">From <input class="gya-in" type="date" id="afFrom"></label><label class="gya-inline">To <input class="gya-in" type="date" id="afTo"></label>
+        <label class="gya-check"><input type="checkbox" id="afExcl"><span>Exclude cancelled and refunded orders</span></label>
+        <button class="gya-btn gya-btn-line gya-btn-sm" id="afCsv" style="margin-left:auto">Export CSV</button></div>
+      <div id="afBody"><p class="gya-muted">Loading…</p></div>`;
+    if (af.preset !== 'custom') [af.from, af.to] = presetRange(af.preset);
+    qs('#afPreset', main).value = af.preset; qs('#afFrom', main).value = af.from; qs('#afTo', main).value = af.to; qs('#afExcl', main).checked = af.excl;
+    let data = null, seq = 0;
+    const draw = async () => {
+      const mine = ++seq, body = qs('#afBody', main);
+      if (!af.from || !af.to) { body.innerHTML = empty('Choose a start and end date.'); return; }
+      if (af.from > af.to) { body.innerHTML = empty('The start date is after the end date.'); return; }
+      body.style.opacity = '.55';
+      let x; try { x = await server('analytics', { from: af.from, to: af.to, exclude_cancelled: af.excl }); }
+      catch (e) { if (mine === seq) { body.style.opacity = ''; body.innerHTML = `<div class="gya-card"><p class="gya-err">${esc(e.message)}</p></div>`; } return; }
+      if (mine !== seq) return;
+      data = x; body.style.opacity = '';
+      const c = x.current, p = x.previous, statusMax = Math.max(1, ...x.by_status.map(s => s.orders)), topMax = Math.max(1, ...x.top_products.map(t => t.qty));
+      const range = x.from === x.to ? dLong(x.from) : `${dLong(x.from)} to ${dLong(x.to)}`;
+      body.innerHTML = `<p class="gya-muted gya-small" style="margin:0 0 10px">${range} · compared with ${dLong(x.previous_from)} to ${dLong(x.previous_to)}${x.exclude_cancelled ? ' · cancelled and refunded orders left out' : ''}</p>
+        <div class="gya-stats gya-stats-3">${kcard('Orders', c.orders, change(c.orders, p.orders))}${kcard('Revenue', $c(c.revenue_cents), change(c.revenue_cents, p.revenue_cents))}
+          ${kcard('Average order value', $c(c.aov_cents), change(c.aov_cents, p.aov_cents))}${kcard('Items sold', c.items, change(c.items, p.items))}
+          ${kcard('New customers', c.new_customers, change(c.new_customers, p.new_customers))}${kcard('Returning customers', c.returning_customers, change(c.returning_customers, p.returning_customers))}</div>
+        <div class="gya-grid2">
+          <section class="gya-card"><h3>Orders ${x.grain === 'month' ? 'by month' : 'by day'}</h3>${barChart(x.series, 'orders', v => String(Math.round(v)), x.grain)}</section>
+          <section class="gya-card"><h3>Revenue ${x.grain === 'month' ? 'by month' : 'by day'}</h3>${barChart(x.series, 'revenue_cents', money0, x.grain)}</section>
+          <section class="gya-card"><h3>Orders by status</h3>${x.by_status.length ? `<div class="gya-hbars">${x.by_status.map(s => `<div class="gya-hbar"><span>${pill(s.status)}</span><i><em style="width:${s.orders / statusMax * 100}%"></em></i><b>${s.orders}</b></div>`).join('')}</div>
+              <p class="gya-muted gya-small">All paid orders in the range, whatever happened to them since.</p>` : empty('No paid orders in this range.')}</section>
+          <section class="gya-card"><h3>Top products</h3>${x.top_products.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Product</th><th>Qty sold</th><th>Revenue</th></tr></thead><tbody>
+              ${x.top_products.map(t => `<tr><td>${esc(t.name)}<div class="gya-hbar gya-hbar-thin"><i><em style="width:${t.qty / topMax * 100}%"></em></i></div></td><td>${t.qty}</td><td>${$c(t.revenue_cents)}</td></tr>`).join('')}</tbody></table></div>` : empty('No products sold in this range.')}</section>
+        </div>
+        <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Monthly breakdown</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Month</th><th>Orders</th><th>Revenue</th><th>Average order value</th><th>Items sold</th></tr></thead><tbody>
+          ${x.monthly.slice().reverse().map(m => `<tr><td>${mLabel(m.month)}</td><td>${m.orders}</td><td>${$c(m.revenue_cents)}</td><td>${m.orders ? $c(m.aov_cents) : '–'}</td><td>${m.items}</td></tr>`).join('')}</tbody></table></div>
+          <p class="gya-muted gya-small" style="padding:0 18px 14px">Newest month first. Months at either end only include the days inside the range.</p></section>`;
+    };
+    const fromInputs = () => { af.preset = 'custom'; qs('#afPreset', main).value = 'custom'; af.from = qs('#afFrom', main).value; af.to = qs('#afTo', main).value; draw(); };
+    qs('#afPreset', main).onchange = e => { af.preset = e.target.value; const r = presetRange(af.preset); if (r) { [af.from, af.to] = r; qs('#afFrom', main).value = af.from; qs('#afTo', main).value = af.to; } draw(); };
+    qs('#afFrom', main).onchange = fromInputs; qs('#afTo', main).onchange = fromInputs;
+    qs('#afExcl', main).onchange = e => { af.excl = e.target.checked; draw(); };
+    qs('#afCsv', main).onclick = () => { if (!data) { toast('Nothing to export yet', true); return; }
+      const url = URL.createObjectURL(new Blob(['﻿' + analyticsCsv(data)], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a'); a.href = url; a.download = `avanti-analytics-${data.from}-to-${data.to}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+    await draw();
+  } });
 
   /* ---------------- Customers ---------------- */
   const cf = { status: '', q: '' };
@@ -3366,10 +3564,27 @@ const GYA = (() => {
   const lf = { kind: '', status: '', q: '' };
   G.section({ id: 'emaillog', label: 'Email log', order: 37, async render(main) {
     main.innerHTML = head('Email log', 'Every email the shop has sent, with delivery status from the email provider.') + `
-      <div class="gya-filters lfilters"><select class="gya-in" id="lfKind"><option value="">All emails</option><option value="transactional">Order emails</option><option value="campaign">Campaigns</option><option value="automation">Automations</option><option value="test">Tests</option></select>
+      <div id="lfSettings"></div><div class="gya-filters lfilters"><select class="gya-in" id="lfKind"><option value="">All emails</option><option value="transactional">Order emails</option><option value="campaign">Campaigns</option><option value="automation">Automations</option><option value="test">Tests</option></select>
         <select class="gya-in" id="lfStatus"><option value="">Any status</option><option value="delivered">Delivered</option><option value="sent">Sent</option><option value="bounced">Bounced</option><option value="complained">Complaint</option><option value="failed">Failed</option><option value="logged">Logged only</option></select>
         <input class="gya-in gya-search" id="lfQ" placeholder="Search recipient"></div><section class="gya-card gya-pad0"><div id="lfList"></div></section>`;
     qs('#lfKind', main).value = lf.kind; qs('#lfStatus', main).value = lf.status; qs('#lfQ', main).value = lf.q;
+    // order email switch and sending status (the page still works if this can't be loaded)
+    const settings = async (change) => { const box = qs('#lfSettings', main); if (!box) return;
+      let st; try { st = await server('email-settings', change || {}); } catch (e) { if (change) toast(e.message, true); return; }
+      const on = st.order_emails_env && st.order_emails_switch;
+      box.innerHTML = `<section class="gya-card"><div class="gya-cardhead"><h3>Order emails ${pill(on ? 'subscribed' : 'unsubscribed', on ? 'On' : 'Off')}</h3>
+          ${st.order_emails_env ? `<button class="gya-btn ${st.order_emails_switch ? 'gya-btn-line' : 'gya-btn-red'} gya-btn-sm" id="lfSwitch">${st.order_emails_switch ? 'Switch off' : 'Switch on'}</button>` : ''}</div>
+        <p class="gya-small" style="margin:0">${on ? `Customers get an email when their order is confirmed, processing, dispatched, delivered, cancelled or refunded.${st.staff_email ? ` New orders are also sent to <b>${esc(st.staff_email)}</b>.` : ''}`
+          : st.order_emails_env ? 'Switched off here: no order emails go to customers or staff until you switch them back on. Orders and payments carry on as normal.'
+          : 'Switched off in Vercel (ORDER_EMAILS_ENABLED=false). Change it there to turn order emails back on.'}</p>
+        ${!st.sending ? '<p class="gya-warn" style="margin:10px 0 0">The email service (Resend) is not connected yet, so emails are recorded below as “Logged only” but not delivered.</p>' : ''}
+        ${st.test_recipient ? `<p class="gya-warn" style="margin:10px 0 0">Test mode: every email goes to <b>${esc(st.test_recipient)}</b> only (EMAIL_TEST_RECIPIENT).</p>` : ''}</section>`;
+      const b = qs('#lfSwitch', box);
+      if (b) b.onclick = () => { const next = !st.order_emails_switch;
+        if (!confirm(next ? 'Switch order emails back on?' : 'Switch off all order emails? Customers will not be told about new orders or status changes until you switch them back on.')) return;
+        busy(b, async () => { await settings({ order_emails: next }); toast(next ? 'Order emails are on' : 'Order emails are off'); }); };
+    };
+    settings();
     let offset = 0, rows = [];
     const draw = async (more) => { if (!more) { offset = 0; rows = []; }
       let q = `select=*&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
@@ -4417,7 +4632,7 @@ async function uploadArtwork(lines){
   }
 }
 
-const ORDER_STEPS=[['paid','Order received'],['in_production','In production'],['dispatched','Dispatched'],['delivered','Delivered']];
+const ORDER_STEPS=[['paid','Order received'],['in_production','Processing'],['dispatched','Dispatched'],['delivered','Delivered']];
 function pageOrder(){ return `<div class="page-head"><div class="wrap"><span class="eyebrow">Your order</span><h1 id="ordTitle">Checking your order…</h1><p id="ordSub"></p></div></div><div class="wrap ord-wrap" id="ordBody"></div>`; }
 async function wireOrder(id, params){
   const t=params.get('t'), started=Date.now();

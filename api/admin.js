@@ -2,7 +2,8 @@
 // Reads happen straight from the database with row-level security; anything that changes an
 // order, sends email or touches consent comes through here so it is validated and audited.
 import { config, db, handle, json, readJson, requireAdmin, HttpError, audit } from './_lib/core.js';
-import { move } from './_lib/effects.js';
+import { move, sendOrderEmail, sendStaffAlert, orderEmailsOn } from './_lib/effects.js';
+import { loadOrder } from './_lib/orders.js';
 import { CARRIERS, marketingEmail } from './_lib/email.js';
 import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, subscribe, unsubscribe, runScheduled, runAutomations } from './_lib/marketing.js';
 
@@ -17,15 +18,48 @@ export const POST = handle(async (req) => {
     case 'order-transition': {
       const to = need(STATUSES.includes(b.to) && b.to, 'Unknown status.');
       const data = {};
-      if (to === 'dispatched') {
+      if (to === 'dispatched') {   // carrier is required; tracking number and link are optional
         data.carrier = need(String(b.carrier || '').trim(), 'Choose a carrier.');
         if (!CARRIERS[data.carrier]) throw new HttpError(400, 'Unknown carrier.');
-        data.tracking_number = need(String(b.tracking_number || '').trim(), 'Enter the tracking number.').slice(0, 80);
+        data.tracking_number = String(b.tracking_number || '').trim().slice(0, 80);
         if (b.tracking_url && !/^https:\/\//.test(b.tracking_url)) throw new HttpError(400, 'Tracking link must start with https://');
         data.tracking_url = b.tracking_url || '';
       }
-      const r = await move(d, need(b.order_id, 'Missing order.'), to, who, String(b.note || '').trim().slice(0, 1000) || null, data, cfg);
+      // "Email the customer" tick box, on unless staff untick it
+      const r = await move(d, need(b.order_id, 'Missing order.'), to, who, String(b.note || '').trim().slice(0, 1000) || null, data, cfg, { notify: b.notify !== false });
       return json(r);
+    }
+    case 'order-resend-email': {   // "Resend email" button: always sends, even if it went before
+      const o = await loadOrder(d, need(b.order_id, 'Missing order.'));
+      if (!o) throw new HttpError(404, 'Order not found.');
+      if (!(await orderEmailsOn(d, cfg))) throw new HttpError(409, 'Order emails are switched off. Switch them on in Email log first.');
+      let r;
+      if (b.which === 'staff') r = await sendStaffAlert(d, o, { force: true, cfg });
+      else {
+        if (o.status === 'pending_payment') throw new HttpError(409, 'This checkout has not been paid, so there is no order email to send.');
+        r = await sendOrderEmail(d, o, o.status, { force: true, cfg });
+      }
+      if (r && r.skipped) throw new HttpError(409, r.skipped === 'no staff address' ? 'No staff email address is set (ADMIN_NOTIFICATION_EMAIL).' : 'There is no email for this status.');
+      await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who,
+        note: `${b.which === 'staff' ? 'New-order email to staff' : 'Status email to the customer'} resent (${r.status === 'failed' ? 'failed' : r.status}).` });
+      await audit(d, who, 'order.email_resend', 'order', o.id, { which: b.which === 'staff' ? 'staff' : 'customer', status: r.status });
+      return json({ status: r.status, to: r.to_email });
+    }
+    case 'email-settings': {   // what the dashboard shows on the Email log page
+      if (typeof b.order_emails === 'boolean') {
+        await d.insert('site_settings', [{ key: 'order_emails', value: b.order_emails }], { onConflict: 'key' });
+        await audit(d, who, b.order_emails ? 'order_emails.on' : 'order_emails.off', 'site_settings', 'order_emails', {});
+      }
+      const sw = await d.one('site_settings', 'select=value&key=eq.order_emails');
+      return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false),
+        test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminNotify === 'off' ? null : cfg.email.adminNotify || null, timezone: cfg.timezone });
+    }
+    case 'analytics': {
+      const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? v : null;
+      const from = need(day(b.from), 'Choose a start date.'), to = need(day(b.to), 'Choose an end date.');
+      if (from > to) throw new HttpError(400, 'The start date is after the end date.');
+      if ((new Date(to) - new Date(from)) / 864e5 > 3700) throw new HttpError(400, 'Choose a range of ten years or less.');
+      return json(await d.rpc('admin_order_analytics', { p_from: from, p_to: to, p_tz: cfg.timezone, p_exclude_cancelled: b.exclude_cancelled !== false }));
     }
     case 'order-note': {
       const o = await d.one('orders', `select=id,status&id=eq.${d.q(need(b.order_id, 'Missing order.'))}`);

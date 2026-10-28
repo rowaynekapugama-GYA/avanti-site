@@ -161,7 +161,7 @@ test('Stripe: session created with the right amounts, then paid only by a signed
   assert.equal(mocks.state.emails.filter(m => m.to[0] === 'jo.buyer@example.com').length, 1);
   // a different event id for the same payment is also harmless
   await postStripe(stripeEvent(o));
-  assert.equal((await logs(`order_id=eq.${o.order_id}`)).length, 1);
+  assert.deepEqual((await logs(`order_id=eq.${o.order_id}`)).map(l => l.template), ['order-paid', 'order-new-staff']);
 });
 
 test('Stripe: payments from the old website are ignored', async () => {
@@ -270,8 +270,8 @@ test('full order lifecycle with emails, tracking and an audit trail', async () =
   const o = await paidOrder();
   let r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production', note: 'Artwork approved' });
   assert.equal(r.status, 200); assert.equal(r.data.status, 'in_production');
-  r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched', carrier: 'Australia Post' });
-  assert.equal(r.status, 400); assert.match(r.data.error, /tracking/);
+  r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched' });
+  assert.equal(r.status, 400); assert.match(r.data.error, /carrier/);
   r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched', carrier: 'Australia Post', tracking_number: 'AP1234567' });
   assert.equal(r.status, 200);
   r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production' });
@@ -283,12 +283,12 @@ test('full order lifecycle with emails, tracking and an audit trail', async () =
   assert.equal(ev[2].actor, 'admin:admin@avanti.test'); assert.equal(ev[2].note, 'Artwork approved');
   assert.ok(ev.every(e => e.created_at));
   const subjects = mocks.state.emails.map(m => m.subject);
-  assert.ok(subjects.some(s => /Order confirmed/.test(s)) && subjects.some(s => /in production/.test(s)) && subjects.some(s => /on its way/.test(s)));
-  assert.ok(!subjects.some(s => /delivered/i.test(s)));
+  assert.ok(subjects.some(s => /Order confirmed/.test(s)) && subjects.some(s => /being processed/.test(s)) && subjects.some(s => /on its way/.test(s)));
+  assert.ok(subjects.some(s => /delivered/i.test(s)));
   const disp = mocks.state.emails.find(m => /on its way/.test(m.subject));
   assert.match(disp.html, /auspost\.com\.au\/mypost\/track\/details\/AP1234567/); assert.match(disp.text, /AP1234567/);
   const log = await logs(`order_id=eq.${o.order_id}`);
-  assert.deepEqual(log.map(l => l.template), ['order-paid', 'order-in_production', 'order-dispatched']);
+  assert.deepEqual(log.map(l => l.template), ['order-paid', 'order-new-staff', 'order-in_production', 'order-dispatched', 'order-delivered']);
   assert.ok(log.every(l => l.status === 'sent' && l.provider_id));
 });
 
@@ -306,7 +306,7 @@ test('cancelling: unpaid checkouts are silent, paid orders get an email', async 
 test('Resend webhooks update the log; hard bounces and complaints stop marketing', async () => {
   await reset();
   const o = await paidOrder();
-  const log = (await logs(`order_id=eq.${o.order_id}`))[0];
+  const log = (await logs(`order_id=eq.${o.order_id}&template=eq.order-paid`))[0];
   const hook = async (type, data, sig) => { const raw = JSON.stringify({ type, created_at: new Date().toISOString(), data: { email_id: log.provider_id, ...data } });
     return call(webhooks.POST, '/api/webhooks?provider=resend', { method: 'POST', body: raw, headers: sig || svixSign(raw, process.env.RESEND_WEBHOOK_SECRET) }); };
   assert.equal((await hook('email.delivered', {}, { 'svix-id': 'x', 'svix-timestamp': String(Math.floor(Date.now() / 1000)), 'svix-signature': 'v1,forged' })).status, 400);
@@ -491,7 +491,182 @@ test('every email is logged, and without a Resend key nothing leaves the buildin
   process.env.RESEND_API_KEY = '';
   const o = await paidOrder();
   const l = await logs(`order_id=eq.${o.order_id}`);
-  assert.equal(l.length, 1); assert.equal(l[0].status, 'logged'); assert.equal(l[0].provider, 'log');
+  assert.equal(l.length, 2); assert.ok(l.every(x => x.status === 'logged' && x.provider === 'log'));
   assert.equal(mocks.state.emails.length, 0);
   process.env.RESEND_API_KEY = 're_test_key';
+});
+
+// ======================= PR 4: order emails, status management, analytics =======================
+const customerMail = () => mocks.state.emails.filter(m => m.to[0] === 'jo.buyer@example.com');
+const staffMail = () => mocks.state.emails.filter(m => m.to[0] === 'info@avantiprint.com.au');
+
+test('a paid order emails the customer the full details and alerts the Avanti team, once each', async () => {
+  await reset();
+  const o = await paidOrder();
+  const [c] = customerMail();
+  assert.match(c.subject, new RegExp(`Order confirmed: ${o.number}`));
+  for (const re of [/Pull Up Banner|Banner/, /\$108\.00 each/, /Subtotal/, /Delivery/, /Total/, /includes GST/i, /12 Print St/, /Smithfield/, /Metro NSW delivery/, /info@avantiprint\.com\.au/])
+    { assert.match(c.html, re, `html missing ${re}`); assert.match(c.text, re, `text missing ${re}`); }
+  const [s] = staffMail();
+  assert.match(s.subject, new RegExp(`New order ${o.number}: \\$[\\d,]+\\.\\d\\d from Jo Buyer`));
+  assert.equal(s.reply_to, 'jo.buyer@example.com');              // reply goes straight to the customer
+  assert.match(s.html, new RegExp(`shop\\.test/#/admin/orders/${o.order_id}`));
+  assert.match(s.text, /jo\.buyer@example\.com/); assert.match(s.text, /0400 000 000/);
+  // Stripe retrying the webhook, or a second event for the same payment, sends nothing new
+  await postStripe(stripeEvent(o)); await postStripe(stripeEvent(o));
+  assert.equal(customerMail().length, 1); assert.equal(staffMail().length, 1);
+});
+
+test('the staff alert can be switched off, and the order still completes', async () => {
+  await reset();
+  process.env.ADMIN_NOTIFICATION_EMAIL = 'off';
+  const o = await paidOrder();
+  delete process.env.ADMIN_NOTIFICATION_EMAIL;
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'paid');
+  assert.equal(staffMail().length, 0); assert.equal(customerMail().length, 1);
+});
+
+test('dispatch without a tracking number; double clicks send one email; delivered email', async () => {
+  await reset();
+  const o = await paidOrder();
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production' });
+  const [a, b] = await Promise.all([1, 2].map(() => act(adminToken, 'order-transition', { order_id: o.order_id, to: 'dispatched', carrier: 'Australia Post' })));
+  assert.equal(a.status, 200); assert.equal(b.status, 200);
+  const disp = customerMail().filter(m => /on its way/.test(m.subject));
+  assert.equal(disp.length, 1);
+  assert.match(disp[0].text, /Australia Post/); assert.doesNotMatch(disp[0].html, /mypost\/track/);
+  const row = await d.one('orders', `select=*&id=eq.${o.order_id}`);
+  assert.equal(row.carrier, 'Australia Post'); assert.equal(row.tracking_number, null);
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'delivered' });
+  const del = customerMail().filter(m => /delivered/i.test(m.subject));
+  assert.equal(del.length, 1); assert.match(del[0].text, new RegExp(o.number));
+  assert.equal((await events(o.order_id)).filter(e => e.to_status === 'dispatched' && e.from_status === 'in_production').length, 1);
+});
+
+test('"Email the customer" unticked: no email, a note on the timeline, and Resend sends it on request', async () => {
+  await reset();
+  const o = await paidOrder();
+  const r = await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'in_production', notify: false });
+  assert.equal(r.status, 200);
+  assert.equal(customerMail().filter(m => /being processed/.test(m.subject)).length, 0);
+  assert.ok((await events(o.order_id)).some(e => /not emailed/.test(e.note || '')));
+  // Resend: always sends when asked, every time
+  for (const n of [1, 2]) {
+    const rs = await act(adminToken, 'order-resend-email', { order_id: o.order_id, which: 'customer' });
+    assert.equal(rs.status, 200, JSON.stringify(rs.data)); assert.equal(rs.data.status, 'sent');
+    assert.equal(customerMail().filter(m => /being processed/.test(m.subject)).length, n);
+  }
+  const st = await act(adminToken, 'order-resend-email', { order_id: o.order_id, which: 'staff' });
+  assert.equal(st.status, 200); assert.equal(staffMail().length, 2);
+  const ev = await events(o.order_id);
+  assert.equal(ev.filter(e => /resent/.test(e.note || '')).length, 3);
+  assert.equal(ev.filter(e => /resent/.test(e.note || '')).at(-1).actor, 'admin:admin@avanti.test');
+  // an unpaid checkout has nothing to resend
+  const p = await newOrder('stripe');
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: p.order_id })).status, 409);
+});
+
+test('order emails can be switched off by env var or by the dashboard switch, without blocking orders', async () => {
+  await reset();
+  process.env.ORDER_EMAILS_ENABLED = 'false';
+  const a = await paidOrder();
+  process.env.ORDER_EMAILS_ENABLED = 'true';
+  assert.equal((await d.one('orders', `select=status&id=eq.${a.order_id}`)).status, 'paid');
+  assert.equal(mocks.state.emails.length, 0);
+  assert.ok((await events(a.order_id)).some(e => /switched off/.test(e.note || '')));
+  // dashboard switch
+  let r = await act(adminToken, 'email-settings', { order_emails: false });
+  assert.equal(r.status, 200); assert.equal(r.data.order_emails_switch, false); assert.equal(r.data.sending, true);
+  assert.equal(r.data.staff_email, 'info@avantiprint.com.au'); assert.equal(r.data.timezone, 'Australia/Sydney');
+  const b = await paidOrder();
+  await act(adminToken, 'order-transition', { order_id: b.order_id, to: 'in_production' });
+  assert.equal(mocks.state.emails.length, 0);
+  assert.equal((await d.one('orders', `select=status&id=eq.${b.order_id}`)).status, 'in_production');
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: b.order_id })).status, 409);
+  r = await act(adminToken, 'email-settings', { order_emails: true });
+  assert.equal(r.data.order_emails_switch, true);
+  assert.equal((await act(adminToken, 'order-transition', { order_id: b.order_id, to: 'dispatched', carrier: 'StarTrack' })).status, 200);
+  assert.equal(customerMail().filter(m => /on its way/.test(m.subject)).length, 1);
+  assert.ok((await d.select('audit_log', 'select=action')).some(x => x.action === 'order_emails.off'));
+});
+
+test('EMAIL_TEST_RECIPIENT sends everything to the test address only', async () => {
+  await reset();
+  process.env.EMAIL_TEST_RECIPIENT = 'tester@gya.test';
+  const o = await paidOrder();
+  delete process.env.EMAIL_TEST_RECIPIENT;
+  assert.equal(mocks.state.emails.length, 2);
+  assert.ok(mocks.state.emails.every(m => m.to[0] === 'tester@gya.test'));
+  assert.ok(mocks.state.emails.some(m => /^\[TEST for jo\.buyer@example\.com\] Order confirmed/.test(m.subject)));
+  assert.ok(mocks.state.emails.some(m => /^\[TEST for info@avantiprint\.com\.au\] New order/.test(m.subject)));
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'paid');
+});
+
+test('an email provider outage never blocks a payment', async () => {
+  await reset();
+  process.env.RESEND_API_BASE = 'http://127.0.0.1:9';         // nothing listening
+  const o = await newOrder('stripe');
+  const r = await postStripe(stripeEvent(o));
+  process.env.RESEND_API_BASE = mocks.url;
+  assert.equal(r.status, 200);
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'paid');
+  const l = await logs(`order_id=eq.${o.order_id}`);
+  assert.ok(l.length === 2 && l.every(x => x.status === 'failed'));
+  const notes = (await events(o.order_id)).map(e => e.note || '').join('\n');
+  assert.match(notes, /Email to the customer failed/); assert.match(notes, /Avanti team failed/);
+  // failed emails are not counted as sent, so Resend works afterwards
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: o.order_id })).data.status, 'sent');
+});
+
+test('new admin actions need a signed-in admin', async () => {
+  for (const [action, body] of [['analytics', { from: '2026-10-01', to: '2026-10-31' }], ['email-settings', { order_emails: false }], ['order-resend-email', { order_id: '00000000-0000-0000-0000-000000000000' }]]) {
+    assert.equal((await act(null, action, body)).status, 401, action);
+    assert.equal((await act(editorToken, action, body)).status, 403, action);
+  }
+  const sw = await d.one('site_settings', 'select=value&key=eq.order_emails');
+  assert.ok(!sw || sw.value !== false);   // the refused requests changed nothing
+});
+
+test('analytics: paid orders only, grouped in Sydney time, with the previous period and cancelled toggle', async () => {
+  await reset();
+  const at = async (o, iso) => d.update('orders', `id=eq.${o.order_id}`, { paid_at: iso });
+  const as = email => ({ customer: { ...CUSTOMER, email } });
+  const a = await paidOrder(); await at(a, '2026-09-30T15:30:00Z');          // 1 Oct 01:30 in Sydney, so October
+  const b = await paidOrder(); await at(b, '2026-10-15T02:00:00Z');
+  const e = await newOrder('stripe', as('kim@test.com')); await postStripe(stripeEvent(e)); await at(e, '2026-09-10T02:00:00Z');   // September
+  const f = await newOrder('stripe', as('kim@test.com')); await postStripe(stripeEvent(f)); await at(f, '2026-10-05T02:00:00Z');   // Kim returns
+  const c = await newOrder('stripe', { ...as('sam@test.com'), lines: [LINE_TOPPER], delivery: { 'cake-toppers': 'Express delivery' } });
+  await postStripe(stripeEvent(c)); await at(c, '2026-10-20T02:00:00Z');
+  await act(adminToken, 'order-transition', { order_id: c.order_id, to: 'cancelled' });
+  await newOrder('stripe');                                                  // unpaid checkout: never counted
+  const tot = o => o.row.total_cents;
+
+  let r = await act(adminToken, 'analytics', { from: '2026-10-01', to: '2026-10-31' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const x = r.data;
+  assert.equal(x.grain, 'day'); assert.equal(x.series.length, 31); assert.equal(x.tz, 'Australia/Sydney');
+  assert.equal(x.current.orders, 3);
+  assert.equal(x.current.revenue_cents, tot(a) + tot(b) + tot(f));
+  assert.equal(x.current.aov_cents, Math.round((tot(a) + tot(b) + tot(f)) / 3));
+  assert.equal(x.current.items, 15);
+  assert.equal(x.current.new_customers, 1); assert.equal(x.current.returning_customers, 1);
+  assert.equal(x.series[0].bucket, '2026-10-01'); assert.equal(x.series[0].orders, 1);
+  assert.equal(x.previous_from, '2026-08-31'); assert.equal(x.previous_to, '2026-09-30');
+  assert.equal(x.previous.orders, 1); assert.equal(x.previous.revenue_cents, tot(e)); assert.equal(x.previous.new_customers, 1);
+  assert.deepEqual(Object.fromEntries(x.by_status.map(s => [s.status, s.orders])), { paid: 3, cancelled: 1 });
+  assert.deepEqual(x.top_products.map(p => [p.slug, p.qty]), [['pull-up-banner', 15]]);
+
+  r = await act(adminToken, 'analytics', { from: '2026-10-01', to: '2026-10-31', exclude_cancelled: false });
+  assert.equal(r.data.current.orders, 4); assert.equal(r.data.current.revenue_cents, tot(a) + tot(b) + tot(f) + tot(c));
+  assert.equal(r.data.top_products.length, 2);
+
+  r = await act(adminToken, 'analytics', { from: '2026-01-01', to: '2026-12-31' });
+  assert.equal(r.data.grain, 'month'); assert.equal(r.data.series.length, 12); assert.equal(r.data.monthly.length, 12);
+  const m = Object.fromEntries(r.data.monthly.map(x => [x.month, x.orders]));
+  assert.equal(m['2026-09-01'], 1); assert.equal(m['2026-10-01'], 3);
+
+  r = await act(adminToken, 'analytics', { from: '2026-10-01', to: '2026-10-01' });
+  assert.equal(r.data.current.orders, 1);                                     // order a lands on 1 October, not 30 September
+  assert.equal((await act(adminToken, 'analytics', { from: '2026-10-31', to: '2026-10-01' })).status, 400);
+  assert.equal((await act(adminToken, 'analytics', { from: 'last week', to: '2026-10-01' })).status, 400);
 });

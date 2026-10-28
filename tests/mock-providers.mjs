@@ -43,7 +43,9 @@ export function startMocks(port = 0) {
       return send(200, { verification_status: b.transmission_sig === 'valid-signature' ? state.verify : 'FAILURE' });
     }
     // ---- Resend ----
-    if (p === '/emails' && req.method === 'POST') { const b = JSON.parse(raw), id = `re_${++n}`; state.emails.push({ id, ...b, idempotency: req.headers['idempotency-key'] }); return send(200, { id }); }
+    if (p === '/emails' && req.method === 'POST') { const b = JSON.parse(raw), id = `re_${++n}`;
+      if (state.failAttachments && b.attachments) return send(422, { message: 'Attachment too large' });   // to test the links-only fallback
+      state.emails.push({ id, ...b, idempotency: req.headers['idempotency-key'] }); return send(200, { id }); }
     if (p === '/emails/batch' && req.method === 'POST') { const b = JSON.parse(raw); state.batches++;
       const data = b.map(x => { const id = `re_${++n}`; state.emails.push({ id, ...x }); return { id }; }); return send(200, { data }); }
     send(404, { message: `mock: no route ${req.method} ${p}` });

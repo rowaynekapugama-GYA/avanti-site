@@ -19,7 +19,7 @@ export async function sendEmail(d, msg, cfg = config()) {
   try {
     const r = await fetch(`${cfg.email.apiBase}/emails`, { method: 'POST',
       headers: { Authorization: `Bearer ${cfg.email.resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': log.id },
-      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(10000) });   // a hung email service never holds up an order
+      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(msg.attachments ? 15000 : 10000) });   // a hung email service never holds up an order
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.message || `Resend error ${r.status}`);
     await d.update('email_log', `id=eq.${log.id}`, { status: 'sent', provider_id: data.id });
@@ -31,7 +31,8 @@ export async function sendEmail(d, msg, cfg = config()) {
 }
 function payload(msg, cfg) {
   return { from: msg.from || (msg.kind === 'transactional' ? cfg.email.from : cfg.email.marketingFrom), to: [msg.to], bcc: msg.bcc ? [msg.bcc] : undefined,
-    reply_to: msg.replyTo || cfg.email.replyTo, subject: msg.subject, html: msg.html, text: msg.text, headers: msg.headers || undefined,
+    reply_to: msg.replyTo || cfg.email.replyTo, subject: msg.subject,
+    attachments: msg.attachments && msg.attachments.length ? msg.attachments.map(a => ({ filename: a.filename, path: a.path })) : undefined, html: msg.html, text: msg.text, headers: msg.headers || undefined,
     tags: msg.campaign_id ? [{ name: 'campaign', value: msg.campaign_id.replace(/[^\w-]/g, '') }] : undefined };
 }
 
@@ -141,10 +142,11 @@ export function orderEmail(kind, o, cfg = config()) {
   const T = {
     paid: {
       subject: `Order confirmed: ${o.number}`, pre: `Thanks ${first(o.name)}, we've received your order.`,
-      body: h1(`Thanks, ${first(o.name)}. Your order is confirmed.`) + p(`We've received your payment for order <b>${e(o.number)}</b>${placed(o, cfg) ? `, placed on ${e(placed(o, cfg))}` : ''}. We'll let you know when we start working on it${(o.items || []).some(i => i.artwork && i.artwork.later) ? ', and we will be in touch about the artwork you are supplying' : ''}.`)
+      body: h1(`Thanks, ${first(o.name)}. Your order is confirmed.`) + p(`We've received your payment for order <b>${e(o.number)}</b>${placed(o, cfg) ? `, placed on ${e(placed(o, cfg))}` : ''}. We'll let you know when we start working on it.`)
+        + ((o.items || []).some(i => i.artwork && i.artwork.later) ? p('<b>Sending your artwork:</b> just reply to this email and attach your files. We start production once your artwork is approved.') : '')
         + itemsTable(o) + p(`<b>Delivering to</b><br>${e(o.name)}<br>${e(addressText(o.shipping_address || {}))}`)
         + (o.delivery_quote_required ? p('Some items in this order need a delivery quote. We will contact you to confirm delivery before dispatch.') : '') + btn('View your order', link) + help(cfg),
-      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.${placed(o, cfg) ? ` Placed ${placed(o, cfg)}.` : ''}\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
+      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.${placed(o, cfg) ? ` Placed ${placed(o, cfg)}.` : ''}${(o.items || []).some(i => i.artwork && i.artwork.later) ? '\n\nSending your artwork: just reply to this email and attach your files. We start production once your artwork is approved.' : ''}\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     in_production: {
       subject: `Your order ${o.number} is being processed`, pre: "We're working on your order now.",
@@ -179,8 +181,14 @@ export function orderEmail(kind, o, cfg = config()) {
 
 // Emails for the Avanti team: "New order" (kind 'new', with everything needed to start the job)
 // and "Payment failed" (kind 'failed': the customer's payment didn't go through).
-export function staffOrderEmail(o, cfg = config(), kind = 'new') {
+// files: the order's artwork as [{item, side, name, url}] (url = 30-day download link), shown on
+// the new-order email; attached = whether the files are also attached; noteTooBig = they couldn't be.
+export function staffOrderEmail(o, cfg = config(), kind = 'new', { files = [], attached = false, noteTooBig = false } = {}) {
   const failed = kind === 'failed';
+  const fileHtml = files.length ? p(`<b>Artwork${attached ? ' (attached)' : ''}</b>`) + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;font-size:14px">${files.map(f =>
+      `<tr><td style="padding:6px 0;border-bottom:1px solid ${LINE}">${e(f.item)}<br><span style="color:${MUTED};font-size:13px">${e(f.side)}: ${e(f.name)}</span></td><td align="right" style="padding:6px 0;border-bottom:1px solid ${LINE}">${f.url ? `<a href="${e(f.url)}" style="color:${RED};font-weight:bold">Download</a>` : `<span style="color:${MUTED};font-size:13px">In the dashboard</span>`}</td></tr>`).join('')}</table>`
+      + p(`<span style="color:${MUTED};font-size:13px">${noteTooBig ? 'The files were too large to attach, so use the links. ' : ''}Download links work for 30 days. After that, download the files from the order in the dashboard.</span>`) : '';
+  const fileText = files.length ? `\nArtwork${attached ? ' (attached)' : ''}:\n${files.map(f => `- ${f.item}, ${f.side}: ${f.name}${f.url ? `\n  ${f.url}` : ' (download it from the dashboard)'}`).join('\n')}\n${noteTooBig ? 'The files were too large to attach, so use the links. ' : ''}Download links work for 30 days.\n` : '';
   const a = o.shipping_address || {};
   const admin = `${cfg.siteUrl}/#/admin/orders/${o.id}`;
   const provider = { stripe: 'Card (Stripe)', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '';
@@ -196,12 +204,12 @@ ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-si
 <tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
 <tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr></table>`
     + p(`<b>Customer</b><br>${e(o.name || '')}${o.company ? `<br>${e(o.company)}` : ''}<br>${e(o.email)}${o.phone ? `<br>${e(o.phone)}` : ''}`)
-    + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '');
+    + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '') + (failed ? '' : fileHtml);
   const text = (failed ? `Payment failed for order ${o.number}: ${money(o.total_cents)}${provider ? ` by ${provider}` : ''}. The checkout was cancelled automatically and the customer has not been charged. You may want to get in touch and help them finish the order.\n\n`
       : `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n`)
     + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
     + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
-    + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n\nOpen in the dashboard: ${admin}`;
+    + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n${failed ? '' : fileText}\nOpen in the dashboard: ${admin}`;
   return { subject: failed ? `Payment failed for order ${o.number} (${money(o.total_cents)}, ${o.name || o.email})` : `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
 }
 

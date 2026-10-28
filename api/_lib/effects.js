@@ -3,7 +3,7 @@
 //
 // Email here must never block or undo an order: everything after the status change is wrapped
 // in try/catch, problems are written to the order's timeline, and the change itself stands.
-import { config } from './core.js';
+import { config, storageSign } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
 import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail } from './email.js';
 
@@ -48,11 +48,36 @@ export async function sendCustomerNote(d, o, note, cfg = config()) {
   return sendEmail(d, { kind: 'transactional', template: 'order-note', to: o.email, bcc: await copyTo(d, o, cfg), order_id: o.id, customer_id: o.customer_id, ...customerNoteEmail(o, note, cfg) }, cfg);
 }
 
+// The customer's uploaded artwork, with a 30-day download link for each file.
+const ATTACH_LIMIT = 12 * 1024 * 1024;   // attach when the files add up to 12 MB or less (inbox limits are ~25 MB)
+async function artworkFiles(o, cfg) {
+  const out = [];
+  for (const i of o.items || []) for (const f of (i.artwork && i.artwork.files) || []) {
+    if (!f.path) continue;
+    let url = null;
+    try { url = await storageSign(cfg, 'artwork', f.path, 30 * 86400); } catch (err) { console.error('artwork link failed', o.id, f.path, err.message); }
+    out.push({ item: i.name, side: f.side || 'Artwork', name: f.name || f.path.split('/').pop(), size: f.size || null, url });
+  }
+  return out;
+}
+
 export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {}) {
   const to = cfg.email.adminNotify;
   if (!to || to === 'off') return { skipped: 'no staff address' };
   if (!force && await alreadySent(d, o.id, 'order-new-staff')) return { skipped: 'already sent' };
-  return sendEmail(d, { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email, ...staffOrderEmail(o, cfg) }, cfg);
+  let files = [];
+  try { files = await artworkFiles(o, cfg); } catch (err) { console.error('artwork files', o.id, err); }
+  const total = files.reduce((t, f) => t + (f.size || 0), 0);
+  const canAttach = files.length > 0 && files.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
+  const base = { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email };
+  if (canAttach) {
+    const r = await sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, attached: true }),
+      attachments: files.map(f => ({ filename: f.name, path: f.url })) }, cfg);
+    if (r.status !== 'failed') return r;
+    console.error('staff alert with attachments failed, sending links only', o.id, r.error);   // fall back to links
+    return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, noteTooBig: true }) }, cfg);
+  }
+  return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, noteTooBig: files.length > 0 && total > ATTACH_LIMIT }) }, cfg);
 }
 async function sendFailedAlert(d, o, cfg) {
   const to = cfg.email.adminNotify;

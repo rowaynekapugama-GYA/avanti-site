@@ -127,3 +127,15 @@ export async function audit(d, actor, action, target_type, target_id, data) {
   try { await d.insert('audit_log', { actor, action, target_type, target_id: target_id == null ? null : String(target_id), data: data || null }); }
   catch (e) { console.error('audit log failed', e.message); }
 }
+
+// A time-limited download link for a private file in Supabase Storage (e.g. customer artwork).
+export async function storageSign(cfg, bucket, path, seconds) {
+  const headers = { apikey: cfg.serviceKey, 'Content-Type': 'application/json' };
+  if (isJwt(cfg.serviceKey)) headers.Authorization = `Bearer ${cfg.serviceKey}`;
+  const r = await fetch(`${cfg.supabaseUrl}/storage/v1/object/sign/${bucket}/${String(path).split('/').map(encodeURIComponent).join('/')}`,
+    { method: 'POST', headers, body: JSON.stringify({ expiresIn: seconds }), signal: AbortSignal.timeout(5000) });
+  const data = await r.json().catch(() => ({}));
+  const rel = data.signedURL || data.signedUrl;
+  if (!r.ok || !rel) throw new Error(data.message || `Storage error ${r.status}`);
+  return `${cfg.supabaseUrl}/storage/v1${rel.startsWith('/') ? '' : '/'}${rel}`;
+}

@@ -64,7 +64,7 @@ export const POST = handle(async (req) => {
     const body = await readJson(req);
     const q = await quote(db(cfg), body);
     return json({ lines: q.lines.map(l => ({ slug: l.product_slug, name: l.name, qty: l.qty, unit_cents: l.unit_cents, line_cents: l.line_cents })),
-      delivery: q.delivery, delivery_cents: q.deliveryCents, subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst, quote_required: q.quoteRequired });
+      delivery: q.delivery, delivery_cents: q.deliveryCents, subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst, quote_required: q.quoteRequired, quote_items: q.quoteItems });
   }
 
   if (action === 'create') {

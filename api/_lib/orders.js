@@ -1,6 +1,6 @@
 // Pricing, delivery and orders. Totals are always recalculated here from the database;
 // whatever the browser says a line costs is ignored.
-import { HttpError, cents, audit } from './core.js';
+import { HttpError, cents, audit, config } from './core.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -48,15 +48,15 @@ export function unitCents(p, qty, opts = {}) {
 // Delivery: one choice per delivery group in the cart (e.g. cake toppers AND banner stands).
 // Items whose category has no delivery rates are flagged for a quote.
 export function deliveryOptions(cat, lines) {
-  const groups = [], seen = new Set(); let quote = false;
+  const groups = [], seen = new Set(), quoteItems = []; let quote = false;
   for (const l of lines) {
     const c = cat.categories[l.category_slug], cls = c && c.shipping_class && cat.classes.find(x => x.slug === c.shipping_class);
-    if (!cls || !cls.rates.length) { quote = true; continue; }
+    if (!cls || !cls.rates.length) { quote = true; if (!quoteItems.includes(l.name)) quoteItems.push(l.name); continue; }
     if (seen.has(cls.slug)) continue; seen.add(cls.slug);
     groups.push({ group: cls.slug, label: cls.label, courier: !!cls.courier, note: cls.note,
       options: cls.rates.map(r => ({ label: r.label, cents: cents(r.amount) })) });
   }
-  return { groups, quote };
+  return { groups, quote, quoteItems };
 }
 
 export function validateCustomer(c = {}) {
@@ -95,7 +95,9 @@ export async function quote(d, body) {
     const artwork = art ? {
       later: !!art.later, design: art.design ? String(art.design).slice(0, 200) : null,
       files: (art.files || []).slice(0, 4).map(f => ({ side: String(f.side || 'Artwork').slice(0, 40), name: String(f.name || '').slice(0, 200),
-        path: /^incoming\/[\w-]{8,64}\/[^/]{1,240}$/.test(f.path || '') ? f.path : null, info: String(f.info || '').slice(0, 200) })),
+        path: /^incoming\/[\w-]{8,64}\/[^/]{1,240}$/.test(f.path || '') ? f.path : null, info: String(f.info || '').slice(0, 200),
+        size: Number.isFinite(+f.size) && +f.size > 0 ? Math.round(+f.size) : null,
+        copy: !!f.copy || f.name === 'Same as front' })),   // "copy": one artwork printed on both sides, nothing to upload
     } : null;
     return { position: i, product_slug: p.slug, name: p.name, category_slug: p.category_slug, options: opts, qty,
       unit_cents: unit, line_cents: unit * qty, artwork };
@@ -112,12 +114,17 @@ export async function quote(d, body) {
   const subtotal = lines.reduce((s, l) => s + l.line_cents, 0), total = subtotal + deliveryCents;
   return { lines, delivery, deliveryCents, deliveryMethod: picked.join('; ') || null, subtotal, total,
     gst: Math.round(total / 11),   // prices include GST
-    quoteRequired: delivery.quote };
+    quoteRequired: delivery.quote, quoteItems: delivery.quoteItems };
 }
 
 export async function createPendingOrder(d, body) {
   const cust = validateCustomer(body.customer);
   const q = await quote(d, { ...body, requireDelivery: true });
+  // no unpriced ($0) delivery: items without a delivery rate are quoted by the team first
+  if (q.quoteRequired) throw new HttpError(400, `Delivery for ${q.quoteItems.join(', ')} needs a quote before you can pay. Please call us on ${config().business.phone} or email ${config().business.email} and we'll quote it and take your order.`);
+  // artwork the customer chose to upload must have arrived (Lauren's order, 27 Oct 2026: files lost on reload)
+  const noFile = q.lines.find(l => l.artwork && !l.artwork.later && !l.artwork.design && (l.artwork.files || []).some(f => !f.path && !f.copy));
+  if (noFile) throw new HttpError(400, `The artwork for ${noFile.name} didn't upload. Please remove it from your cart and add it again with your file, or choose "supply artwork later".`);
   const campaign = /^[0-9a-f-]{36}$/.test(body.campaign_id || '') ? body.campaign_id : null;
   const [order] = await d.insert('orders', {
     email: cust.email, name: cust.name, phone: cust.phone, company: cust.company, shipping_address: cust.address,

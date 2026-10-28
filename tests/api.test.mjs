@@ -30,6 +30,12 @@ const mk = await import('../api/_lib/marketing.js');
 const d = db();
 
 // ---------- helpers ----------
+// give a category a delivery rate (orders can't be paid with unpriced delivery)
+async function rateFor(category) {
+  await d.insert('shipping_classes', [{ slug: 'test-packaging', label: 'Packaging', courier: false, position: 9 }], { onConflict: 'slug', ignore: true });
+  if (!(await d.select('shipping_rates', 'select=id&class_slug=eq.test-packaging')).length) await d.insert('shipping_rates', { class_slug: 'test-packaging', label: 'Metro', amount: 20, position: 0 });
+  await d.update('categories', `slug=eq.${category}`, { shipping_class: 'test-packaging' });
+}
 async function call(fn, path, { method = 'GET', body, headers = {}, form } = {}) {
   const init = { method, headers: { ...headers } };
   if (form) { init.body = new URLSearchParams(form).toString(); init.headers['content-type'] = 'application/x-www-form-urlencoded'; }
@@ -472,8 +478,9 @@ test('automations: each flow sends once, only when enabled, only to consenting c
   assert.equal(abMail.to[0], 'w@test.com'); assert.match(abMail.html, /Banner/);
   // post-purchase packaging reminder after 60 days
   await mk.subscribe(d, { email: 'box@test.com', basis: 'footer_signup' });
+  await rateFor('mailer-boxes');
   const box = await newOrder('stripe', { customer: { ...CUSTOMER, email: 'box@test.com' }, lines: [{ slug: 'custom-branded-mailer-boxes', qty: 100,
-    opts: { Material: 'White E Flute 1.5mm', 'Size (mm)': '225 × 160 × 80', Printing: 'Single side (outside only)' } }], delivery: {} });
+    opts: { Material: 'White E Flute 1.5mm', 'Size (mm)': '225 × 160 × 80', Printing: 'Single side (outside only)' } }], delivery: { 'test-packaging': 'Metro' } });
   await postStripe(stripeEvent(box));
   assert.equal((await mk.runAutomations(d, new Date(now + 10 * 24 * H))).post_purchase, 0);
   assert.equal((await mk.runAutomations(d, new Date(now + 61 * 24 * H))).post_purchase, 1);
@@ -766,4 +773,71 @@ test('notes can be emailed to the customer; internal notes are not', async () =>
   assert.equal((await act(adminToken, 'order-note', { order_id: o.order_id, note: 'hello', to_customer: true })).status, 409);
   await act(adminToken, 'email-settings', { order_emails: true });
   assert.equal((await act(editorToken, 'order-note', { order_id: o.order_id, note: 'x', to_customer: true })).status, 403);
+});
+
+// ======================= Artwork and delivery safeguards =======================
+const MAILER = { slug: 'custom-branded-mailer-boxes', qty: 100, opts: { Material: 'White E Flute 1.5mm', 'Size (mm)': '225 × 160 × 80', Printing: 'Single side (outside only)' } };
+async function upload(name, bytes) {   // the customer's browser uploading artwork (anonymous, incoming/ only)
+  const path = `incoming/${crypto.randomUUID()}/Artwork-${name}`;
+  const r = await fetch(`${T.TEST_SUPABASE_URL}/storage/v1/object/artwork/${path}`, { method: 'POST', headers: { apikey: T.TEST_ANON_KEY, 'Content-Type': 'application/pdf' }, body: Buffer.alloc(bytes, 1) });
+  assert.equal(r.status, 200); return path;
+}
+
+test('items without a delivery rate cannot be paid with $0 delivery', async () => {
+  await reset();
+  const q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER] } });
+  assert.equal(q.data.quote_required, true); assert.equal(q.data.quote_items.length, 1);
+  const r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER,
+    lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER], delivery: { 'pull-up-banners': 'Metro NSW delivery' } } });
+  assert.equal(r.status, 400); assert.match(r.data.error, /needs a quote before you can pay/); assert.match(r.data.error, /\(02\) 9729 0139/);
+  assert.equal((await d.select('orders', 'select=id')).length, 0);   // nothing created
+  assert.equal(mocks.state.stripeSessions.length, 0);                 // and nothing sent to Stripe
+});
+
+test('artwork the customer chose to upload must have arrived before payment', async () => {
+  await reset(); await rateFor('mailer-boxes');
+  const body = art => ({ provider: 'stripe', customer: CUSTOMER, lines: [{ ...MAILER, art }], delivery: { 'test-packaging': 'Metro' } });
+  let r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: body({ files: [{ side: 'Artwork', name: 'logo.pdf' }] }) });
+  assert.equal(r.status, 400); assert.match(r.data.error, /didn't upload/);
+  r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: body({ later: true }) });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  await postStripe(stripeEvent({ order_id: r.data.order_id, row: await d.one('orders', `select=*&id=eq.${r.data.order_id}`) }));
+  assert.match(customerMail().at(-1).text, /reply to this email and attach your files/);
+  const path = await upload('logo.pdf', 1000);
+  r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: body({ files: [{ side: 'Front', name: 'logo.pdf', path, size: 1000 }, { side: 'Back', name: 'Same as front', copy: true }] }) });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const item = await d.one('order_items', `select=artwork&order_id=eq.${r.data.order_id}`);
+  assert.equal(item.artwork.files[0].path, path); assert.equal(item.artwork.files[0].size, 1000); assert.equal(item.artwork.files[1].copy, true);
+});
+
+test('the new-order email carries the artwork: attached when small, always with download links', async () => {
+  await reset(); await rateFor('mailer-boxes');
+  const order = async files => { const o = await newOrder('stripe', { lines: [{ ...MAILER, art: { files } }], delivery: { 'test-packaging': 'Metro' } }); await postStripe(stripeEvent(o)); return o; };
+  // small: attached, with links
+  const p1 = await upload('logo.pdf', 2000);
+  const a = await order([{ side: 'Artwork', name: 'logo.pdf', path: p1, size: 2000 }]);
+  let s = staffMail().at(-1);
+  assert.equal(s.attachments.length, 1); assert.equal(s.attachments[0].filename, 'logo.pdf');
+  assert.match(s.attachments[0].path, /\/storage\/v1\/object\/sign\/artwork\/incoming\/.+token=/);
+  assert.match(s.html, /Artwork \(attached\)/); assert.match(s.html, />Download</); assert.match(s.text, /object\/sign\/artwork/);
+  const dl = await fetch(s.attachments[0].path); assert.equal(dl.status, 200);   // the link really downloads the file
+  assert.equal(customerMail().at(-1).attachments, undefined);                      // the customer's email has no attachments
+  // too big to attach: links only, and it says so
+  const p2 = await upload('huge.pdf', 10);
+  await order([{ side: 'Artwork', name: 'huge.pdf', path: p2, size: 20 * 1024 * 1024 }]);
+  s = staffMail().at(-1);
+  assert.equal(s.attachments, undefined); assert.match(s.text, /too large to attach/); assert.match(s.html, />Download</);
+  // the email service refuses the attachment: the team still gets the order, with links
+  mocks.state.failAttachments = true;
+  const p3 = await upload('logo2.pdf', 1500);
+  const c = await order([{ side: 'Artwork', name: 'logo2.pdf', path: p3, size: 1500 }]);
+  mocks.state.failAttachments = false;
+  s = staffMail().at(-1);
+  assert.equal(s.attachments, undefined); assert.match(s.text, /Download links work for 30 days/); assert.match(s.subject, /New order/);
+  assert.deepEqual((await logs(`order_id=eq.${c.order_id}&template=eq.order-new-staff`)).map(l => l.status), ['failed', 'sent']);
+  // no artwork: no artwork section
+  await rateFor('mailer-boxes');
+  await order(undefined);
+  assert.doesNotMatch(staffMail().at(-1).text, /Artwork/);
+  assert.equal((await d.one('orders', `select=status&id=eq.${a.order_id}`)).status, 'paid');
 });

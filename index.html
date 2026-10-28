@@ -4427,7 +4427,7 @@ function artStudio(p){
       if(s.isPdf) e.info='Print-ready PDF';
       else { const dpi=dpiNow(s); e.info=`${s.imgW}×${s.imgH}px · ${dpi} DPI (${dpiVerdict(dpi).label}) · ${s.mode==='fill'?'Fill':'Fit'}${s.zoom>1?` · ${s.zoom.toFixed(1)}×`:''}`; }
       out.push(e); });
-    if(cfg.autocopy && cfg.sides===2 && out.length===1) out.push({side:cfg.tabs[1],name:'Same as front',info:'One artwork supplied, printed both sides',thumb:out[0].thumb});
+    if(cfg.autocopy && cfg.sides===2 && out.length===1) out.push({side:cfg.tabs[1],name:'Same as front',info:'One artwork supplied, printed both sides',thumb:out[0].thumb,copy:true});
     return Object.assign({files:out}, orv?{orient:orv}:{});
   }};
 }
@@ -4462,7 +4462,7 @@ function wireProduct(){
   $$('.pf-text').forEach(i=>i.addEventListener('input',()=>{ const c=$(`[data-count="${i.id}"]`); if(c) c.textContent=`${i.maxLength-i.value.length} characters remaining`; syncPv(); }));
   if(fnt) fnt.addEventListener('change',syncPv);
   syncPv();
-  $('#addBtn').onclick=()=>{
+  $('#addBtn').onclick=async()=>{
     const opts={}; let missing=null;
     $$('[data-opt]').forEach(s=>{ if(!s.value) missing=missing||s.dataset.opt; else opts[s.dataset.opt]=s.value; });
     if(p.dims){ const w=$('#dimW').value,h=$('#dimH').value; if(!w||!h){ toast('Enter your wall width and height first'); $('#dimW').focus(); return; } opts['Wall']=`${w} × ${h} mm`; }
@@ -4479,6 +4479,13 @@ function wireProduct(){
       if(art.orient) opts['Orientation']=art.orient;
       if(art.design) opts['Design']=art.design;
       if(!art.design && !art.later && !(art.files&&art.files.length)){ toast('Upload your artwork, or tick “supply artwork later”'); return; } }
+    // upload the artwork now, so it's safe even if the page is refreshed before checkout
+    if(art&&art.files&&art.files.some(f=>f.file)&&artStoreReady()){
+      const b=$('#addBtn'), label=b.textContent; b.disabled=true; b.textContent='Uploading artwork…';
+      try{ for(const f of art.files){ if(f.file&&!f.path){ f.path=await uploadArtFile(f.file, f.side); f.size=f.file.size; } } }
+      catch(err){ toast(err.message); b.disabled=false; b.textContent=label; return; }
+      b.disabled=false; b.textContent=label;
+    }
     addToCart(p.s, Math.max(1,+qty.value||1), opts, art);
   };
   $$('[data-img]').forEach(b=>b.onclick=()=>{ let m=$('#mainImg'); if(!m){ const holder=$('.gallery .main'); if(!holder) return; holder.querySelector('.ph')?.remove(); m=document.createElement('img'); m.id='mainImg'; holder.appendChild(m); } m.src=b.dataset.img; if(b.dataset.alt) m.alt=b.dataset.alt; $$('[data-img]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
@@ -4558,7 +4565,7 @@ async function apiCall(path, body){
   if(!r.ok) throw new Error(d.error||'Something went wrong. Please try again.');
   return d;
 }
-const cartForServer = () => cart.lines.map(l=>({slug:l.slug, qty:l.qty, opts:l.opts, art:l.art?{later:!!l.art.later, design:l.art.design||null, files:(l.art.files||[]).map(f=>({side:f.side, name:f.name, info:f.info||''}))}:null}));
+const cartForServer = () => cart.lines.map(l=>({slug:l.slug, qty:l.qty, opts:l.opts, art:l.art?{later:!!l.art.later, design:l.art.design||null, files:(l.art.files||[]).map(f=>({side:f.side, name:f.name, info:f.info||'', path:f.path||null, size:f.size||null, copy:!!f.copy}))}:null}));
 
 function pageCheckout(params){
   if(!cart.lines.length) return `<div class="page-head"><div class="wrap"><span class="eyebrow">Checkout</span><h1>Your cart is empty</h1><p>Add something from the shop and come back here to pay.</p></div></div><div class="wrap" style="padding-bottom:72px"><a class="btn btn-red btn-lg" href="#/shop">Browse the shop</a></div>`;
@@ -4594,11 +4601,14 @@ async function wireCheckout(params){
   const offline = () => { $('#coDelivery').innerHTML=''; $('#coPay').innerHTML='';
     note(`Online payment isn't available just yet. Please call us on <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email your order</a> and we'll look after it.`, true); };
   // lines whose artwork file was lost when the page reloaded
-  const lost = cart.lines.filter(l=>l.art&&l.art.files&&l.art.files.length&&!cartFiles.has(l.key));
+  const lost = cart.lines.filter(l=>l.art&&l.art.files&&l.art.files.some(f=>!f.path&&!f.copy&&f.name!=='Same as front')&&!cartFiles.has(l.key));
+  const mustFix = lost.length && artStoreReady();   // on the live site a missing file must be re-added before paying
   $('#coLines').innerHTML = cart.lines.map(l=>{ const p=prod(l.slug); return `<div class="co-line"><div class="thumb">${thumb(p)}</div><div><b>${esc(p.n)}</b> <span class="co-qty">× ${l.qty}</span>
     ${Object.keys(l.opts).length?`<div class="co-muted co-small">${Object.values(l.opts).map(esc).join(' · ')}</div>`:''}
-    ${l.art&&l.art.later?'<div class="co-muted co-small">Artwork to follow</div>':''}${lost.includes(l)?'<div class="co-warn">Artwork needs re-uploading, or send it after checkout</div>':''}</div><div class="co-price" data-line="${esc(l.key)}">${money(unitPrice(p,l.qty,l.opts)*l.qty)}</div></div>`; }).join('');
-  if(lost.length) note(`The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} couldn't be kept when the page reloaded. You can pay now and email the artwork afterwards, or remove the item and add it again with the file.`);
+    ${l.art&&l.art.later?'<div class="co-muted co-small">Artwork to follow</div>':''}${lost.includes(l)?`<div class="co-warn">Artwork missing: <a href="#/product/${esc(l.slug)}">add it again with your file</a>${mustFix?'':', or send it after checkout'}</div>`:''}</div><div class="co-price" data-line="${esc(l.key)}">${money(unitPrice(p,l.qty,l.opts)*l.qty)}</div></div>`; }).join('');
+  if(lost.length) note(mustFix
+    ? `The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} didn't reach us. Please remove ${lost.length>1?'those items':'that item'} from your cart and add ${lost.length>1?'them':'it'} again with the file, or choose “supply artwork later”. Then you can pay.`
+    : `The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} couldn't be kept when the page reloaded. You can pay now and email the artwork afterwards, or remove the item and add it again with the file.`, !!mustFix);
   let q=null, cfg=null, choice={};
   const totals=()=>{ if(!q) return; let del=0; q.delivery.groups.forEach(g=>{ const o=g.options.find(o=>o.label===choice[g.group])||g.options[0]; del+=o.cents; });
     const total=q.subtotal_cents+del;
@@ -4610,13 +4620,14 @@ async function wireCheckout(params){
   try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
   q.lines.forEach((l,i)=>{ const el=$$('#coLines .co-price')[i]; if(el) el.textContent=cents$(l.line_cents); });
   $('#coDelivery').innerHTML = (q.delivery.groups.map(g=>`<fieldset class="co-radios"><legend>${esc(g.label)}</legend>${g.options.map((o,i)=>`<label><input type="radio" name="del-${esc(g.group)}" value="${esc(o.label)}" data-group="${esc(g.group)}" ${i===0?'checked':''}><span>${esc(o.label)}</span><b>${cents$(o.cents)}</b></label>`).join('')}${g.courier&&(g.note||SHIP_NOTE)?`<p class="co-muted co-small">${esc(g.note||SHIP_NOTE)}</p>`:''}</fieldset>`).join('')
-    + (q.quote_required?`<p class="co-note">Some items are delivered by courier at a quoted rate. We'll contact you to confirm delivery before dispatch; it isn't included in today's total.</p>`:'')) || '<p class="co-muted">No delivery charge.</p>';
+    + (q.quote_required?`<p class="co-note co-warn">Delivery for ${esc((q.quote_items||[]).join(', ')||'some items')} needs a quote before you can pay online. Call us on <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email us</a> and we'll quote it and take your order. Or remove ${(q.quote_items||[]).length>1?'those items':'that item'} to pay for the rest now.</p>`:'')) || '<p class="co-muted">No delivery charge.</p>';
   q.delivery.groups.forEach(g=>{ choice[g.group]=g.options[0].label; });
   $('#coDelivery').onchange=e=>{ const r=e.target.closest('input[type=radio]'); if(r){ choice[r.dataset.group]=r.value; totals(); } };
   totals();
   $('#coPay').innerHTML = `<fieldset class="co-radios">${cfg.providers.map((p,i)=>`<label><input type="radio" name="provider" value="${p.id}" ${i===0?'checked':''}><span>${esc(p.label)}</span>${p.test?'<b class="co-test">TEST MODE</b>':''}</label>`).join('')}</fieldset>`;
-  $('#coSubmit').disabled=false;
+  $('#coSubmit').disabled = !!(q.quote_required || mustFix);   // no unpriced delivery, no missing artwork
   $('#coForm').onsubmit=async e=>{ e.preventDefault();
+    if(q.quote_required || mustFix) return;
     const f=$('#coForm'), bad=[...f.querySelectorAll('[required]')].find(x=>!x.value.trim()) || (!/^\d{4}$/.test($('#coPostcode').value.trim())?$('#coPostcode'):null) || (!$('#coEmail').checkValidity()?$('#coEmail'):null);
     if(bad){ bad.focus(); note(`Please check ${esc((bad.labels[0]||{}).textContent||'this field').replace(/optional/,'').trim().toLowerCase()}.`, true); return; }
     const btn=$('#coSubmit'); btn.disabled=true; btn.textContent='Preparing secure payment…';
@@ -4633,20 +4644,29 @@ async function wireCheckout(params){
 }
 
 // Customer artwork goes straight to the private "artwork" store (upload-only for the public).
-async function uploadArtwork(lines){
+// Files are uploaded when the item is added to the cart, so a refresh before checkout can't lose them.
+const artStoreReady = () => { const c=window.GYA_CMS_CONFIG||{}; return !!(c.supabaseUrl && c.anonKey && !window.GYA_DEMO); };
+async function uploadArtFile(file, side){
   const c=window.GYA_CMS_CONFIG||{}, base=c.supabaseUrl, key=c.anonKey;
+  const folder=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2));
+  const path=`incoming/${folder}/${(side||'artwork').replace(/\W+/g,'-')}-${file.name.replace(/[^\w.-]+/g,'-').slice(-120)}`;
+  const h={apikey:key, 'Content-Type':file.type||'application/octet-stream', 'x-upsert':'false'}; if(/^eyJ/.test(key)) h.Authorization='Bearer '+key;
+  let r; try{ r=await fetch(`${base}/storage/v1/object/artwork/${path}`, {method:'POST', headers:h, body:file}); }catch(e){ r=null; }
+  if(!r||!r.ok) throw new Error(r&&r.status===413 ? `${file.name} is too large (32 MB maximum). Please use a smaller file, or tick "supply artwork later".` : `We couldn't upload ${file.name}. Please try again, or tick "supply artwork later".`);
+  return path;
+}
+async function uploadArtwork(lines){
   for(let i=0;i<cart.lines.length;i++){
-    const l=cart.lines[i], files=cartFiles.get(l.key), out=lines[i].art;
-    if(!out||!out.files||!out.files.length) continue;
-    if(!files||!base||!key||window.GYA_DEMO){ out.later=true; out.files=out.files.map(f=>({...f, path:null})); continue; }
-    const folder=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2));
-    for(let j=0;j<out.files.length;j++){ const file=files[j]; if(!file) continue;
-      const path=`incoming/${folder}/${(out.files[j].side||'artwork').replace(/\W+/g,'-')}-${file.name.replace(/[^\w.-]+/g,'-').slice(-120)}`;
-      const h={apikey:key, 'Content-Type':file.type||'application/octet-stream', 'x-upsert':'false'}; if(/^eyJ/.test(key)) h.Authorization='Bearer '+key;
-      const r=await fetch(`${base}/storage/v1/object/artwork/${path}`, {method:'POST', headers:h, body:file});
-      if(!r.ok) throw new Error(`We couldn't upload ${file.name}. Please try again, or tick "supply artwork later" for that item.`);
-      out.files[j].path=path; }
+    const l=cart.lines[i], files=cartFiles.get(l.key)||[], out=lines[i].art;
+    if(!out||!out.files||!out.files.length||out.later||out.design) continue;
+    if(!artStoreReady()){ out.later=true; out.files=out.files.map(f=>({...f, path:null})); continue; }   // demo: nothing is uploaded
+    for(let j=0;j<out.files.length;j++){ const f=out.files[j];
+      if(f.path||f.copy||f.name==='Same as front') continue;
+      if(!files[j]) throw new Error(`The artwork for ${prod(l.slug).n} is missing. Please add the item again with your file.`);
+      f.path=await uploadArtFile(files[j], f.side); f.size=files[j].size;
+      const keep=l.art.files[j]; if(keep){ keep.path=f.path; keep.size=f.size; } }
   }
+  saveCart();
 }
 
 const ORDER_STEPS=[['paid','Order received'],['in_production','Processing'],['dispatched','Dispatched'],['delivered','Delivered']];

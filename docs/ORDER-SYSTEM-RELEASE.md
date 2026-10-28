@@ -39,9 +39,16 @@ It is the same status underneath, so existing orders are unaffected.
 - An email only counts as sent if it didn't fail, and is never sent twice for the same order and
   status automatically, so webhook retries and double clicks can't send duplicates.
 - All new admin actions check on the server that the person is a signed-in admin.
-- The database change is additive: one index, one new read-only function, and the existing
-  status function re-created with tracking number made optional. No table, column or row is
-  dropped, renamed or rewritten.
+- The database change is additive: two indexes, one new server-only table for the on/off
+  switch (not readable by the public), one new read-only function, and the existing status
+  function re-created with two small changes: tracking number optional on Dispatched, and a paid
+  order that was cancelled can become Refunded. No table, column or row is dropped, renamed or
+  rewritten.
+- Fixed along the way: previously, refunding a cancelled order in Stripe or PayPal made their
+  webhook fail and retry for days. Now the order simply moves to Refunded and the customer gets
+  the refund email.
+- Emails time out after 10 seconds, so a slow email service never holds up a payment.
+- Resend is only offered on orders that were actually paid.
 
 ## Settings (Vercel > Settings > Environment Variables)
 
@@ -62,8 +69,8 @@ Add or change these **before** the production deploy (or redeploy after changing
 
 Paste and run `scripts/migrations/004-order-emails-analytics.sql`. It's safe to run more than
 once and should end with "Migration 004 done". Run it just before or just after the production
-deploy. Until it's run, everything works except: Analytics shows an error, and Dispatched still
-needs a tracking number.
+deploy. Until it's run, everything works except: Analytics shows an error, the on/off switch
+asks you to run it, and Dispatched still needs a tracking number.
 
 ## Email delivery (Resend) and DNS
 
@@ -111,8 +118,10 @@ On the Preview (with `EMAIL_TEST_RECIPIENT` set) or on live with the $1 hidden t
     refuses analytics without sign-in.
 11. Cancel and refund the test orders in Stripe/PayPal as usual, then unpublish the test product.
 
-Automated: `tests/api.test.mjs` (36 tests, including 9 new ones for this release) all pass
-against a local copy of the database.
+Automated: `tests/api.test.mjs` (37 tests, 10 of them new for this release) all pass against a
+local copy of the database built from all migrations, plus browser tests of the new dashboard
+screens, the demo, sign-out, password reset and a 214-page storefront sweep. An independent
+code review found no problems with checkout or duplicate emails; its smaller findings are fixed.
 
 ## Rollback
 
@@ -126,4 +135,5 @@ If anything goes wrong after going live:
    `safety/pre-order-system-2026-10-28` (commit 41e1051).
 4. **Database:** nothing needs undoing. The old site works with migration 004 in place (the new
    function and index are simply unused). If you want the old "tracking number required" rule
-   back, re-run the `order_transition` part of `scripts/migrations/002-orders.sql`.
+   back, re-run the `order_transition` part of `scripts/migrations/002-orders.sql` (this also
+   removes the cancelled to refunded step).

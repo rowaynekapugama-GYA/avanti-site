@@ -14,10 +14,14 @@ Full notes, settings, testing checklist and rollback: `docs/ORDER-SYSTEM-RELEASE
   search orders by customer name, order email on/off switch in Email log.
 - New Analytics section: presets and custom range, KPIs with % change, charts, top products,
   monthly table, CSV export, Sydney time.
-- Emails never block an order, never send twice automatically, and can be switched off.
+- Emails never block an order, never send twice automatically, time out after 10 seconds, and
+  can be switched off.
+- Fix: refunding a cancelled order in Stripe or PayPal now marks it Refunded instead of making
+  the webhook fail.
 - New settings (all optional): `ORDER_EMAILS_ENABLED`, `ADMIN_NOTIFICATION_EMAIL`,
   `EMAIL_TEST_RECIPIENT`, `BUSINESS_TIMEZONE`. See `.env.example`.
-- Database: run `scripts/migrations/004-order-emails-analytics.sql` in Supabase. Additive only.
+- Database: run `scripts/migrations/004-order-emails-analytics.sql` in Supabase. Additive only
+  (indexes, a server-only `app_flags` table, the analytics function, updated status rules).
 
 | File | Change |
 | --- | --- |

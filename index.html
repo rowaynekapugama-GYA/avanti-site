@@ -322,7 +322,7 @@
 
   // Admin actions the real site sends to /api/admin, answered here with the same rules.
   // Nothing is emailed: messages are written to the email log marked as demo.
-  const NEXT_OK = { pending_payment: ['paid', 'cancelled'], paid: ['in_production', 'cancelled', 'refunded'], in_production: ['dispatched', 'cancelled', 'refunded'], dispatched: ['delivered', 'refunded'], delivered: ['refunded'] };
+  const NEXT_OK = { pending_payment: ['paid', 'cancelled'], paid: ['in_production', 'cancelled', 'refunded'], in_production: ['dispatched', 'cancelled', 'refunded'], dispatched: ['delivered', 'refunded'], delivered: ['refunded'], cancelled: ['refunded'] };
   const bad = m => { throw new Error(m); };
   function segMatch(rules, c) {
     const list = (rules && rules.rules) || []; if (!list.length) return true;
@@ -386,7 +386,7 @@
       case 'order-transition': {
         const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
         if (o.status === b.to) return { changed: false, status: o.status };
-        if (!(NEXT_OK[o.status] || []).includes(b.to)) bad('That status change is not allowed from the order’s current status.');
+        if (!(NEXT_OK[o.status] || []).includes(b.to) || (b.to === 'refunded' && !o.paid_at)) bad('That status change is not allowed from the order’s current status.');
         if (b.to === 'dispatched' && !b.carrier) bad('Choose a carrier to mark the order as dispatched.');
         const from = o.status; o.status = b.to; o[b.to + '_at'] = now();
         if (b.to === 'dispatched') Object.assign(o, { carrier: b.carrier, tracking_number: b.tracking_number || null, tracking_url: b.tracking_url || null });
@@ -401,7 +401,7 @@
       case 'order-resend-email': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
         if (!emailsOn()) bad('Order emails are switched off. Switch them on in Email log first.');
         const staff = b.which === 'staff';
-        if (!staff && o.status === 'pending_payment') bad('This checkout has not been paid, so there is no order email to send.');
+        if (!o.paid_at) bad('This checkout was never paid, so there is no order email to send.');
         const to = staff ? 'info@avantiprint.com.au' : o.email;
         logMail({ kind: 'transactional', template: staff ? 'order-new-staff' : 'order-' + o.status, to_email: to, order_id: o.id, subject: staff ? `New order ${o.number}` : SUBJECT(o)[o.status] });
         db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `${staff ? 'New-order email to staff' : 'Status email to the customer'} resent (logged).`, created_at: now() }));
@@ -3108,7 +3108,8 @@ const GYA = (() => {
     if (!o) { main.innerHTML = head('Order not found') + '<p><a class="gya-link" href="#/admin/orders">Back to orders</a></p>'; return; }
     const [items, events, mails] = await Promise.all([rest(`order_items?select=*&order_id=eq.${enc(id)}&order=position`), rest(`order_events?select=*&order_id=eq.${enc(id)}&order=created_at`),
       rest(`email_log?select=template,to_email,status,created_at,bounce_reason,error&order_id=eq.${enc(id)}&order=created_at`)]);
-    const a = o.shipping_address || {}, acts = NEXT[o.status] || [];
+    // a paid order that was cancelled can still be marked refunded once the money has gone back
+    const a = o.shipping_address || {}, acts = NEXT[o.status] || (o.status === 'cancelled' && o.paid_at ? [['refunded', 'Mark refunded', 'line']] : []);
     const who = e => e.startsWith('admin:') ? esc(e.slice(6)) : e === 'customer' ? 'Customer' : e.startsWith('webhook:') ? `${esc(e.slice(8)[0].toUpperCase() + e.slice(9))} (automatic)` : e === 'paypal:capture' ? 'PayPal (automatic)' : e === 'system' ? 'System' : esc(e);
     const refLink = o.provider === 'stripe' && o.provider_ref ? `https://dashboard.stripe.com/search?query=${enc(o.provider_ref)}` : o.provider === 'paypal' && o.provider_ref ? `https://www.paypal.com/activity/payment/${enc(o.provider_ref)}` : '';
     const mailPill = m => pill(m.status === 'delivered' ? 'delivered_mail' : m.status);
@@ -3117,7 +3118,7 @@ const GYA = (() => {
         <span class="gya-muted">${dtt(e.created_at)} · ${who(e.actor)}</span>${e.note ? `<p>${esc(e.note)}</p>` : ''}${e.data && e.data.carrier && e.to_status === 'dispatched' ? `<p>${esc(e.data.carrier)}${e.data.tracking_number ? ` · ${esc(e.data.tracking_number)}` : ' · no tracking number'}</p>` : ''}</li>` }))
       .concat(mails.map(m => ({ at: m.created_at, html: `<li class="gya-tl-mail"><b>Email: ${esc(mailName(m.template))} ${mailPill(m)}</b><span class="gya-muted">${dtt(m.created_at)} · to ${esc(m.to_email || '')}</span>${m.error || m.bounce_reason ? `<p class="gya-warn-t">${esc(m.error || m.bounce_reason)}</p>` : ''}</li>` })))
       .sort((x, y) => new Date(x.at) - new Date(y.at)).map(x => x.html).join('');
-    const canResend = o.status !== 'pending_payment';
+    const canResend = !!o.paid_at;   // never email someone whose checkout was not paid
     main.innerHTML = head(`${esc(o.number)} ${pill(o.status)}`, `Placed ${dtt(o.created_at)} · <a class="gya-link" href="#/admin/orders">Back to orders</a>`,
       acts.map(([to, label, kind]) => `<button class="gya-btn ${kind === 'red' ? 'gya-btn-red' : 'gya-btn-line'}" data-to="${to}">${label}</button>`).join('')) + `
       <div id="odMailState"></div><div id="odForm"></div>
@@ -3141,7 +3142,7 @@ const GYA = (() => {
           <section class="gya-card"><h3>Payment</h3><dl class="gya-dl"><dt>Provider</dt><dd>${esc({ stripe: 'Stripe', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '')}</dd>
             <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
             <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
-            ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
+            ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
           <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
             ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}</div>
               <p class="gya-muted gya-small">Each email goes out once automatically. Resend sends it again, even if it went before.</p>` : ''}</section>

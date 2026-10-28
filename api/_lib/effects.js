@@ -7,11 +7,11 @@ import { config } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
 import { sendEmail, orderEmail, staffOrderEmail } from './email.js';
 
-// Staff can switch order emails off instantly in the dashboard (site setting "order_emails" = false).
-// ORDER_EMAILS_ENABLED=false in Vercel switches them off too. If the setting can't be read, behave as before.
+// Staff can switch order emails off instantly in the dashboard (server-only flag "order_emails" = false).
+// ORDER_EMAILS_ENABLED=false in Vercel switches them off too. If the flag can't be read, behave as before.
 export async function orderEmailsOn(d, cfg = config()) {
   if (!cfg.email.ordersEnabled) return false;
-  try { const r = await d.one('site_settings', 'select=value&key=eq.order_emails'); return !(r && r.value === false); }
+  try { const r = await d.one('app_flags', 'select=value&key=eq.order_emails'); return !(r && r.value === false); }
   catch (e) { return true; }
 }
 

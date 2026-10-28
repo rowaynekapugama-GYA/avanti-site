@@ -19,7 +19,7 @@ export async function sendEmail(d, msg, cfg = config()) {
   try {
     const r = await fetch(`${cfg.email.apiBase}/emails`, { method: 'POST',
       headers: { Authorization: `Bearer ${cfg.email.resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': log.id },
-      body: JSON.stringify(payload(msg, cfg)) });
+      body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(10000) });   // a hung email service never holds up an order
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.message || `Resend error ${r.status}`);
     await d.update('email_log', `id=eq.${log.id}`, { status: 'sent', provider_id: data.id });
@@ -152,10 +152,10 @@ export function orderEmail(kind, o, cfg = config()) {
       text: `Order ${o.number} is being processed. We'll email you when it's dispatched.\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     dispatched: {
-      subject: `Your order ${o.number} is on its way`, pre: o.carrier ? `Sent with ${o.carrier}.` : 'Your order has been dispatched.',
-      body: h1('Your order is on its way') + p(`Order <b>${e(o.number)}</b> has been dispatched${o.carrier && o.carrier !== 'Other' ? ` with <b>${e(o.carrier)}</b>` : ''}.`)
+      subject: `Your order ${o.number} is on its way`, pre: o.carrier === 'Own delivery' ? 'Our team is delivering it.' : o.carrier && o.carrier !== 'Other' ? `Sent with ${o.carrier}.` : 'Your order has been dispatched.',
+      body: h1('Your order is on its way') + p(`Order <b>${e(o.number)}</b> has been dispatched${o.carrier === 'Own delivery' ? ' and our team will deliver it' : o.carrier && o.carrier !== 'Other' ? ` with <b>${e(o.carrier)}</b>` : ''}.`)
         + (o.tracking_number ? p(`Tracking number: <b>${e(o.tracking_number)}</b>`) : '') + (trackingUrl(o) ? btn('Track your delivery', trackingUrl(o)) : btn('View your order', link)) + summary(o) + help(cfg),
-      text: `Order ${o.number} has been dispatched${o.carrier && o.carrier !== 'Other' ? ` with ${o.carrier}` : ''}.${o.tracking_number ? `\nTracking number: ${o.tracking_number}` : ''}${trackingUrl(o) ? `\nTrack it: ${trackingUrl(o)}` : ''}\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
+      text: `Order ${o.number} has been dispatched${o.carrier === 'Own delivery' ? ' and our team will deliver it' : o.carrier && o.carrier !== 'Other' ? ` with ${o.carrier}` : ''}.${o.tracking_number ? `\nTracking number: ${o.tracking_number}` : ''}${trackingUrl(o) ? `\nTrack it: ${trackingUrl(o)}` : ''}\n\n${itemsText(o)}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     delivered: {
       subject: `Your order ${o.number} has been delivered`, pre: 'We hope you love it.',

@@ -48,6 +48,7 @@ async function reset() {
   for (const t of ['webhook_events', 'email_log', 'automation_sends', 'consent_log', 'order_events', 'order_items', 'orders', 'customers', 'campaigns', 'segments', 'audit_log'])
     await d.remove(t, ['webhook_events', 'order_events', 'order_items', 'consent_log', 'automation_sends', 'audit_log'].includes(t) ? 'id=gte.0' : 'id=not.is.null');
   await d.update('automation_flows', 'key=not.is.null', { enabled: false });
+  try { await d.remove('app_flags', 'key=not.is.null'); } catch (e) {}
   for (const [key, delay_hours] of [['welcome', 0], ['abandoned_cart', 24], ['post_purchase', 1440], ['win_back', 4320]]) await d.update('automation_flows', `key=eq.${key}`, { delay_hours });
   await d.update('automation_flows', 'key=eq.post_purchase', { categories: ['mailer-boxes', 'shipping-cartons'] });
   mocks.state.emails.length = 0; mocks.state.stripeSessions.length = 0;
@@ -623,7 +624,7 @@ test('new admin actions need a signed-in admin', async () => {
     assert.equal((await act(null, action, body)).status, 401, action);
     assert.equal((await act(editorToken, action, body)).status, 403, action);
   }
-  const sw = await d.one('site_settings', 'select=value&key=eq.order_emails');
+  const sw = await d.one('app_flags', 'select=value&key=eq.order_emails');
   assert.ok(!sw || sw.value !== false);   // the refused requests changed nothing
 });
 
@@ -669,4 +670,37 @@ test('analytics: paid orders only, grouped in Sydney time, with the previous per
   assert.equal(r.data.current.orders, 1);                                     // order a lands on 1 October, not 30 September
   assert.equal((await act(adminToken, 'analytics', { from: '2026-10-31', to: '2026-10-01' })).status, 400);
   assert.equal((await act(adminToken, 'analytics', { from: 'last week', to: '2026-10-01' })).status, 400);
+});
+
+test('review fixes: refund after cancelling, never-paid checkouts, own delivery wording, dates, switch privacy', async () => {
+  await reset();
+  // a paid order is cancelled, then refunded in Stripe: the webhook succeeds and the order shows Refunded
+  const o = await paidOrder();
+  await act(adminToken, 'order-transition', { order_id: o.order_id, to: 'cancelled' });
+  const r = await postStripe(JSON.stringify({ id: 'evt_ref_after_cancel', type: 'charge.refunded', data: { object: { payment_intent: `pi_${o.order_id.slice(0, 8)}`, amount: o.row.total_cents, amount_refunded: o.row.total_cents, refunded: true } } }));
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'refunded');
+  assert.ok(customerMail().some(m => /Refund for order/.test(m.subject)));
+  // an unpaid checkout that was cancelled: nothing to resend, and it can't be "refunded"
+  const u = await newOrder('stripe');
+  await act(adminToken, 'order-transition', { order_id: u.order_id, to: 'cancelled' });
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: u.order_id })).status, 409);
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: u.order_id, which: 'staff' })).status, 409);
+  assert.equal((await act(adminToken, 'order-transition', { order_id: u.order_id, to: 'refunded' })).status, 409);
+  // own delivery reads naturally
+  const v = await paidOrder();
+  await act(adminToken, 'order-transition', { order_id: v.order_id, to: 'in_production' });
+  await act(adminToken, 'order-transition', { order_id: v.order_id, to: 'dispatched', carrier: 'Own delivery' });
+  const disp = customerMail().filter(m => /on its way/.test(m.subject)).at(-1);
+  assert.match(disp.text, /our team will deliver it/); assert.doesNotMatch(disp.text, /with Own delivery/);
+  // impossible dates are refused plainly
+  assert.equal((await act(adminToken, 'analytics', { from: '2026-02-31', to: '2026-03-05' })).status, 400);
+  // the email switch is not visible to the public
+  await act(adminToken, 'email-settings', { order_emails: false });
+  const pub = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/app_flags?select=*`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.doesNotMatch(await pub.text(), /order_emails/);
+  const ss = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/site_settings?select=key`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.doesNotMatch(await ss.text(), /order_emails/);
+  assert.equal((await d.one('app_flags', 'select=value&key=eq.order_emails')).value, false);
+  await act(adminToken, 'email-settings', { order_emails: true });
 });

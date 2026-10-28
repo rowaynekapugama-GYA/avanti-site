@@ -1,15 +1,29 @@
 -- GYA CMS migration 004: order analytics, and dispatch without a tracking number.
 -- Run after 003 (SQL Editor > New query > paste > Run). Safe to run again.
 --
--- Additive only: one new index, one new read-only function for the server, and the existing
--- order_transition function re-created with a single change (a tracking number is no longer
--- required to mark an order as dispatched; the carrier still is). No table, column or row is
--- dropped, renamed or rewritten, and existing orders keep their status and data.
+-- Additive only: two new indexes, one new server-only table for switches, one new read-only
+-- function for the server, and the existing order_transition function re-created with two small
+-- changes (see below). No table, column or row is dropped, renamed or rewritten, and existing
+-- orders keep their status and data.
 
--- ---------- faster date ranges for analytics ----------------------------------------------
+-- ---------- faster date ranges for analytics, faster email look-ups per order ---------------
 create index if not exists orders_paid_at_idx on public.orders (paid_at);
+create index if not exists email_log_order_idx on public.email_log (order_id);
 
--- ---------- status changes (same rules as 002; tracking number now optional) ---------------
+-- ---------- server-only switches (e.g. the dashboard's order email on/off) ---------------------
+-- Row-level security with no policies: only the server (service role) can read or change these.
+create table if not exists public.app_flags (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.app_flags enable row level security;
+revoke all on public.app_flags from anon, authenticated;
+
+-- ---------- status changes (same rules as 002, with two changes) ----------------------------
+-- 1. A tracking number is optional when marking dispatched (the carrier is still required).
+-- 2. A paid order that was cancelled can then be marked refunded, so a refund made in Stripe or
+--    PayPal after cancelling updates the order instead of being rejected.
 create or replace function public.order_transition(p_order uuid, p_to text, p_actor text,
   p_note text default null, p_data jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -26,6 +40,7 @@ begin
     when 'in_production'   then array['dispatched','cancelled','refunded']
     when 'dispatched'      then array['delivered','refunded']
     when 'delivered'       then array['refunded']
+    when 'cancelled'       then case when o.paid_at is not null then array['refunded'] else array[]::text[] end
     else array[]::text[] end;
   if not (p_to = any(allowed)) then
     raise exception 'invalid_transition: % -> %', o.status, p_to using errcode = 'P0001';
@@ -144,7 +159,7 @@ begin
     'monthly', coalesce((select jsonb_agg(jsonb_build_object('month', month, 'orders', orders, 'revenue_cents', revenue_cents, 'items', items,
                   'aov_cents', case when orders > 0 then round(revenue_cents::numeric / orders) else 0 end) order by month) from monthly), '[]'::jsonb),
     'by_status', coalesce((select jsonb_agg(jsonb_build_object('status', status, 'orders', orders) order by orders desc) from by_status), '[]'::jsonb),
-    'top_products', coalesce((select jsonb_agg(jsonb_build_object('slug', slug, 'name', name, 'qty', qty, 'revenue_cents', revenue_cents)) from top), '[]'::jsonb)
+    'top_products', coalesce((select jsonb_agg(jsonb_build_object('slug', slug, 'name', name, 'qty', qty, 'revenue_cents', revenue_cents) order by qty desc, revenue_cents desc) from top), '[]'::jsonb)
   ) into v_out;
   return v_out;
 end $$;

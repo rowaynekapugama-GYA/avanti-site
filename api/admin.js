@@ -32,13 +32,9 @@ export const POST = handle(async (req) => {
     case 'order-resend-email': {   // "Resend email" button: always sends, even if it went before
       const o = await loadOrder(d, need(b.order_id, 'Missing order.'));
       if (!o) throw new HttpError(404, 'Order not found.');
+      if (!o.paid_at) throw new HttpError(409, 'This checkout was never paid, so there is no order email to send.');
       if (!(await orderEmailsOn(d, cfg))) throw new HttpError(409, 'Order emails are switched off. Switch them on in Email log first.');
-      let r;
-      if (b.which === 'staff') r = await sendStaffAlert(d, o, { force: true, cfg });
-      else {
-        if (o.status === 'pending_payment') throw new HttpError(409, 'This checkout has not been paid, so there is no order email to send.');
-        r = await sendOrderEmail(d, o, o.status, { force: true, cfg });
-      }
+      const r = b.which === 'staff' ? await sendStaffAlert(d, o, { force: true, cfg }) : await sendOrderEmail(d, o, o.status, { force: true, cfg });
       if (r && r.skipped) throw new HttpError(409, r.skipped === 'no staff address' ? 'No staff email address is set (ADMIN_NOTIFICATION_EMAIL).' : 'There is no email for this status.');
       await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who,
         note: `${b.which === 'staff' ? 'New-order email to staff' : 'Status email to the customer'} resent (${r.status === 'failed' ? 'failed' : r.status}).` });
@@ -47,15 +43,17 @@ export const POST = handle(async (req) => {
     }
     case 'email-settings': {   // what the dashboard shows on the Email log page
       if (typeof b.order_emails === 'boolean') {
-        await d.insert('site_settings', [{ key: 'order_emails', value: b.order_emails }], { onConflict: 'key' });
-        await audit(d, who, b.order_emails ? 'order_emails.on' : 'order_emails.off', 'site_settings', 'order_emails', {});
+        try { await d.insert('app_flags', [{ key: 'order_emails', value: b.order_emails, updated_at: new Date().toISOString() }], { onConflict: 'key' }); }
+        catch (e) { throw new HttpError(409, 'The on/off switch needs the database update (migration 004). Run it in Supabase, then try again.'); }
+        await audit(d, who, b.order_emails ? 'order_emails.on' : 'order_emails.off', 'app_flags', 'order_emails', {});
       }
-      const sw = await d.one('site_settings', 'select=value&key=eq.order_emails');
+      let sw = null; try { sw = await d.one('app_flags', 'select=value&key=eq.order_emails'); } catch (e) { /* not set up yet: on */ }
       return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false),
         test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminNotify === 'off' ? null : cfg.email.adminNotify || null, timezone: cfg.timezone });
     }
     case 'analytics': {
-      const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? v : null;
+      const day = v => { const s = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;   // and a real date: no 31 February
+        const t = new Date(s + 'T00:00:00Z'); return !isNaN(t) && t.toISOString().slice(0, 10) === s ? s : null; };
       const from = need(day(b.from), 'Choose a start date.'), to = need(day(b.to), 'Choose an end date.');
       if (from > to) throw new HttpError(400, 'The start date is after the end date.');
       if ((new Date(to) - new Date(from)) / 864e5 > 3700) throw new HttpError(400, 'Choose a range of ten years or less.');

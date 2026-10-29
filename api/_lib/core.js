@@ -2,6 +2,8 @@
 // Runs on Vercel (Node 20, Web-standard Request/Response handlers). No npm packages.
 
 const E = (k, d = '') => (process.env[k] ?? d);
+const adminList = v => { const s = String(v || '').trim().toLowerCase();
+  return s === 'off' ? [] : [...new Set(s.split(/[\s,;]+/).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)))].slice(0, 5); };
 const isJwt = k => /^eyJ[\w-]*\.[\w-]+\.[\w-]*$/.test(k || '');
 
 // Read settings at call time so tests (and Vercel previews) can change them.
@@ -41,8 +43,9 @@ export function config() {
       // When set, every outgoing email goes only to this address (for testing a preview safely).
       testRecipient: E('EMAIL_TEST_RECIPIENT').trim().toLowerCase(),
       // Who gets the "new order received" email. Set to 'off' for none.
-      // one address (if a list is entered, the first valid address is used); 'off' turns staff emails off
-      adminNotify: (s => s === 'off' ? 'off' : (s.split(/[\s,;]+/).find(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)) || ''))(E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au').trim().toLowerCase()),
+      // who gets new-order, artwork and payment-failed alerts and the copies of customer emails:
+      // one or more addresses separated by commas; 'off' turns staff emails off
+      adminList: adminList(E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au, rowayne@gyaclients.com')),
     },
     timezone: E('BUSINESS_TIMEZONE', 'Australia/Sydney').trim() || 'Australia/Sydney',
     business: {   // shown in every email footer (the Spam Act requires sender identification)

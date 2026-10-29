@@ -56,7 +56,7 @@ export const POST = handle(async (req) => {
       let sw = null; try { sw = await d.one('app_flags', 'select=value&key=eq.order_emails'); } catch (e) { /* not set up yet: on */ }
       const copies = await flag(d, 'order_email_copies');
       return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false), copies,
-        test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminNotify === 'off' ? null : cfg.email.adminNotify || null, timezone: cfg.timezone });
+        test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminList.join(', ') || null, timezone: cfg.timezone });
     }
     case 'analytics': {
       const day = v => { const s = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;   // and a real date: no 31 February

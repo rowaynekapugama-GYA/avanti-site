@@ -13,7 +13,7 @@ Object.assign(process.env, {
   SITE_URL: 'https://shop.test', SUPABASE_URL: T.TEST_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: T.TEST_SERVICE_KEY, SUPABASE_ANON_KEY: T.TEST_ANON_KEY,
   STRIPE_SECRET_KEY: 'rk_test_123', STRIPE_WEBHOOK_SECRET: 'whsec_test_stripe', STRIPE_API_BASE: mocks.url,
   PAYPAL_CLIENT_ID: 'pp-client', PAYPAL_CLIENT_SECRET: 'pp-secret', PAYPAL_WEBHOOK_ID: 'WH-1', PAYPAL_API_BASE: mocks.url,
-  PAYMENTS_SIMULATOR: 'true', RESEND_API_KEY: 're_test_key', RESEND_API_BASE: mocks.url,
+  PAYMENTS_SIMULATOR: 'true', RESEND_API_KEY: 're_test_key', RESEND_API_BASE: mocks.url, ADMIN_NOTIFICATION_EMAIL: 'info@avantiprint.com.au',
   RESEND_WEBHOOK_SECRET: 'whsec_' + Buffer.from('resend-test-secret-32-bytes-long!!').toString('base64'),
   CRON_SECRET: 'cron-test-secret', BUSINESS_ABN: '12 345 678 901', BUSINESS_ADDRESS: '1 Test St, Smithfield NSW 2164',
 });
@@ -24,7 +24,7 @@ const emailApi = await import('../api/email.js');
 const cron = await import('../api/cron.js');
 const { stripeSign } = await import('../api/_lib/payments.js');
 const { svixSign } = await import('../api/_lib/email.js');
-const { db } = await import('../api/_lib/core.js');
+const { db, config } = await import('../api/_lib/core.js');
 const { loadCatalogue, unitCents } = await import('../api/_lib/orders.js');
 const mk = await import('../api/_lib/marketing.js');
 const d = db();
@@ -533,7 +533,7 @@ test('the staff alert can be switched off, and the order still completes', async
   await reset();
   process.env.ADMIN_NOTIFICATION_EMAIL = 'off';
   const o = await paidOrder();
-  delete process.env.ADMIN_NOTIFICATION_EMAIL;
+  process.env.ADMIN_NOTIFICATION_EMAIL = 'info@avantiprint.com.au';
   assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'paid');
   assert.equal(staffMail().length, 0); assert.equal(customerMail().length, 1);
 });
@@ -855,10 +855,17 @@ test('second review: one staff address from a list, honest note wording, attachm
   await reset();
   process.env.ADMIN_NOTIFICATION_EMAIL = 'Orders@Avantiprint.com.au, jo@avantiprint.com.au';
   const o = await paidOrder();
-  delete process.env.ADMIN_NOTIFICATION_EMAIL;
+  process.env.ADMIN_NOTIFICATION_EMAIL = 'info@avantiprint.com.au';
   const staff = mocks.state.emails.filter(m => /^New order/.test(m.subject));
-  assert.equal(staff.length, 1); assert.deepEqual(staff[0].to, ['orders@avantiprint.com.au']);
+  assert.deepEqual(staff.map(m => m.to), [['orders@avantiprint.com.au'], ['jo@avantiprint.com.au']]);   // one email each
+  assert.deepEqual(mocks.state.emails.filter(m => /^\[Copy\]/.test(m.subject)).map(m => m.to[0]), ['orders@avantiprint.com.au', 'jo@avantiprint.com.au']);
   assert.equal(customerMail().length, 1);                                       // the customer's email is unaffected
+  // with no setting, alerts go to Avanti and GYA
+  const keep = process.env.ADMIN_NOTIFICATION_EMAIL; delete process.env.ADMIN_NOTIFICATION_EMAIL;
+  assert.deepEqual(config().email.adminList, ['info@avantiprint.com.au', 'rowayne@gyaclients.com']);
+  process.env.ADMIN_NOTIFICATION_EMAIL = keep;
+  const r = await act(adminToken, 'email-settings', {});
+  assert.equal(r.data.staff_email, 'info@avantiprint.com.au');
   // without the email service, the timeline doesn't claim the note was emailed
   process.env.RESEND_API_KEY = '';
   await act(adminToken, 'order-note', { order_id: o.order_id, note: 'Proof attached', to_customer: true });

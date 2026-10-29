@@ -57,7 +57,7 @@ All new settings have safe defaults, so nothing **has** to be added for this rel
 | Variable | What it does | Example | Where |
 | --- | --- | --- | --- |
 | `ORDER_EMAILS_ENABLED` | `false` stops every order email (customer and staff). Orders still work. | `true` | Production and Preview |
-| `ADMIN_NOTIFICATION_EMAIL` | Who gets the "New order" email. `off` turns it off. Defaults to `info@avantiprint.com.au`. | `info@avantiprint.com.au` | Production and Preview |
+| `ADMIN_NOTIFICATION_EMAIL` | Who gets Avanti's alerts (new order, artwork received, payment failed) and the copies of customer emails. Comma separated; each address gets its own email. `off` turns them off. Defaults to `info@avantiprint.com.au, rowayne@gyaclients.com`. | `info@avantiprint.com.au, rowayne@gyaclients.com` | Production and Preview |
 | `EMAIL_TEST_RECIPIENT` | Testing only: every email goes to this address instead, with `[TEST for ...]` in the subject. | `you@example.com` | **Preview only. Never Production.** |
 | `BUSINESS_TIMEZONE` | Timezone for analytics and email dates. Defaults to Sydney. | `Australia/Sydney` | Production and Preview |
 | `RESEND_API_KEY` | Already supported. Until it's set, emails are logged in the dashboard but not delivered. | `re_...` | Production |

@@ -31,7 +31,8 @@ Artwork and delivery (from order AVP-1002):
 - Items with no delivery price can't be paid with $0 delivery: the cart and checkout ask the
   customer to call or email for a quote.
 - WebP images are no longer offered for artwork (the artwork store doesn't accept them).
-- `ADMIN_NOTIFICATION_EMAIL` uses the first valid address if a list is entered.
+- Avanti's alerts and copies go to info@avantiprint.com.au and rowayne@gyaclients.com by default,
+  each as its own email. Change the list with `ADMIN_NOTIFICATION_EMAIL` (comma separated, up to 5).
 
 No database change. Files: `api/_lib/effects.js`, `api/_lib/email.js`, `api/_lib/orders.js`,
 `api/_lib/core.js`, `api/admin.js`, `api/checkout.js`, `index.html`, `tests/`. Tests: 44 API tests,

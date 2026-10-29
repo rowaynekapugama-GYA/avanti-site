@@ -23,9 +23,17 @@ export async function flag(d, key, fallback = true) {
   catch (e) { return fallback; }
 }
 async function copyTo(d, o, cfg) {
-  const to = cfg.email.adminNotify;
-  if (!to || to === 'off' || to === String(o.email || '').toLowerCase()) return undefined;
-  return (await flag(d, 'order_email_copies')) ? to : undefined;
+  const list = cfg.email.adminList.filter(a => a !== String(o.email || '').toLowerCase());
+  return list.length && (await flag(d, 'order_email_copies')) ? list : [];
+}
+// Staff emails go to each address separately, so one bounce never affects the others.
+// Returns the first result that didn't fail (or the first failure).
+async function toTeam(cfg, send) {
+  const list = cfg.email.adminList;
+  if (!list.length) return { skipped: 'no staff address' };
+  const results = [];
+  for (const to of list) results.push(await send(to));
+  return results.find(r => r && r.status !== 'failed') || results[0];
 }
 
 // An email counts as already sent unless every earlier attempt failed.
@@ -47,10 +55,9 @@ export async function sendOrderEmail(d, o, status, { force = false, cfg = config
 }
 async function sendCopy(d, o, template, m, cfg) {
   try {
-    const to = await copyTo(d, o, cfg);
-    if (!to) return;
-    await sendEmail(d, { kind: 'transactional', template: `copy-${template}`, to, order_id: o.id, replyTo: o.email,
-      subject: `[Copy] ${m.subject}`, html: m.html, text: `Copy of the email sent to ${o.email}. Replying goes to the customer.\n\n${m.text}` }, cfg);
+    for (const to of await copyTo(d, o, cfg))
+      await sendEmail(d, { kind: 'transactional', template: `copy-${template}`, to, order_id: o.id, replyTo: o.email,
+        subject: `[Copy] ${m.subject}`, html: m.html, text: `Copy of the email sent to ${o.email}. Replying goes to the customer.\n\n${m.text}` }, cfg);
   } catch (err) { console.error('copy to Avanti failed', o.id, err); }
 }
 
@@ -76,27 +83,28 @@ async function artworkFiles(o, cfg, items = o.items || []) {
 }
 
 export async function sendStaffAlert(d, o, { force = false, cfg = config() } = {}) {
-  const to = cfg.email.adminNotify;
-  if (!to || to === 'off') return { skipped: 'no staff address' };
+  if (!cfg.email.adminList.length) return { skipped: 'no staff address' };
   if (!force && await alreadySent(d, o.id, 'order-new-staff')) return { skipped: 'already sent' };
   let files = [];
   try { files = await artworkFiles(o, cfg); } catch (err) { console.error('artwork files', o.id, err); }
   const total = files.reduce((t, f) => t + (f.size || 0), 0);
   const canAttach = files.length > 0 && files.length <= ATTACH_MAX && files.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
-  const base = { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email };
-  if (canAttach) {
-    const r = await sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, attached: true }),
-      attachments: files.map(f => ({ filename: f.name, path: f.url })) }, cfg);
-    if (r.status !== 'failed') return r;
-    console.error('staff alert with attachments failed, sending links only', o.id, r.error);   // fall back to links
-    return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: 'failed' }) }, cfg);
-  }
-  return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: files.length ? 'size' : '' }) }, cfg);
+  return toTeam(cfg, async to => {
+    const base = { kind: 'transactional', template: 'order-new-staff', to, order_id: o.id, replyTo: o.email };
+    if (canAttach) {
+      const r = await sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, attached: true }),
+        attachments: files.map(f => ({ filename: f.name, path: f.url })) }, cfg);
+      if (r.status !== 'failed') return r;
+      console.error('staff alert with attachments failed, sending links only', o.id, r.error);   // fall back to links
+      return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: 'failed' }) }, cfg);
+    }
+    return sendEmail(d, { ...base, ...staffOrderEmail(o, cfg, 'new', { files, notAttached: files.length ? 'size' : '' }) }, cfg);
+  });
 }
 async function sendFailedAlert(d, o, cfg) {
-  const to = cfg.email.adminNotify;
-  if (!to || to === 'off' || await alreadySent(d, o.id, 'order-failed-staff')) return null;
-  return sendEmail(d, { kind: 'transactional', template: 'order-failed-staff', to, order_id: o.id, replyTo: o.email, ...staffOrderEmail(o, cfg, 'failed') }, cfg);
+  if (!cfg.email.adminList.length || await alreadySent(d, o.id, 'order-failed-staff')) return null;
+  const m = staffOrderEmail(o, cfg, 'failed');
+  return toTeam(cfg, to => sendEmail(d, { kind: 'transactional', template: 'order-failed-staff', to, order_id: o.id, replyTo: o.email, ...m }, cfg));
 }
 
 // Customers who chose "supply artwork later": an email with a link to upload it (and one reminder).
@@ -123,14 +131,16 @@ export async function receiveArtwork(d, o, item, files, cfg = config()) {
     note: `Customer uploaded artwork for ${item.name}: ${added.map(f => f.name).join(', ')}` });
   try {
     if (!(await orderEmailsOn(d, cfg))) return;
-    const to = cfg.email.adminNotify;
-    if (!to || to === 'off') return;
+    if (!cfg.email.adminList.length) return;
     const links = await artworkFiles(o, cfg, [{ ...item, artwork: { files: added } }]);
     const total = links.reduce((t, f) => t + (f.size || 0), 0);
     const canAttach = links.length <= ATTACH_MAX && links.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
-    const base = { kind: 'transactional', template: 'order-artwork-staff', to, order_id: o.id, replyTo: o.email };
-    let r = canAttach ? await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { attached: true }), attachments: links.map(f => ({ filename: f.name, path: f.url })) }, cfg) : null;
-    if (!r || r.status === 'failed') r = await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { notAttached: r ? 'failed' : 'size' }) }, cfg);
+    const r = await toTeam(cfg, async to => {
+      const base = { kind: 'transactional', template: 'order-artwork-staff', to, order_id: o.id, replyTo: o.email };
+      let x = canAttach ? await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { attached: true }), attachments: links.map(f => ({ filename: f.name, path: f.url })) }, cfg) : null;
+      if (!x || x.status === 'failed') x = await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { notAttached: x ? 'failed' : 'size' }) }, cfg);
+      return x;
+    });
     if (r.status === 'failed') await timelineNote(d, o, `Artwork email to the Avanti team failed: ${String(r.error || '').slice(0, 300)}`);
   } catch (err) {
     console.error('receiveArtwork: staff email failed', o.id, err);

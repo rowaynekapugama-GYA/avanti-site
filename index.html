@@ -400,10 +400,10 @@
         return { changed: true, from, status: b.to }; }
       case 'order-resend-email': { const o = db.t.orders.find(x => x.id === b.order_id) || bad('Order not found.');
         if (!emailsOn()) bad('Order emails are switched off. Switch them on in Email log first.');
-        const staff = b.which === 'staff';
+        const staff = b.which === 'staff', artwork = b.which === 'artwork';
         if (!o.paid_at) bad('This checkout was never paid, so there is no order email to send.');
         const to = staff ? 'info@avantiprint.com.au' : o.email;
-        logMail({ kind: 'transactional', template: staff ? 'order-new-staff' : 'order-' + o.status, to_email: to, order_id: o.id, subject: staff ? `New order ${o.number}` : SUBJECT(o)[o.status] });
+        logMail({ kind: 'transactional', template: staff ? 'order-new-staff' : artwork ? 'order-artwork-request' : 'order-' + o.status, to_email: to, order_id: o.id, subject: staff ? `New order ${o.number}` : artwork ? `Upload your artwork for order ${o.number}` : SUBJECT(o)[o.status] });
         db.t.order_events.push(withDefaults('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `${staff ? 'New-order email to staff' : 'Status email to the customer'} resent (logged).`, created_at: now() }));
         return { status: 'logged', to }; }
       case 'email-settings': {
@@ -827,6 +827,7 @@ p{margin:0 0 1em}
 .art-panel .art-later small{margin-left:25px}
 .to-studio{display:inline-block;background:none;border:0;padding:0;margin-top:10px;color:var(--red);text-decoration:underline;cursor:pointer;font-size:.85rem}
 .art-later{margin-top:16px;padding:12px 14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--r)}
+.ord-art{margin-top:18px}.ord-art-item{padding:12px 0;border-top:1px solid var(--line)}.ord-art-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}.ord-art-row input{flex:1;min-width:0;font-size:.9rem}.ord-art-msg{color:var(--red,#c8102e);margin:6px 0 0}
 .art-later small{display:block;color:var(--ink-3);margin-top:4px;margin-left:25px}
 .tpl-links{margin-top:14px;font-size:.82rem}
 .tpl-links a{color:var(--red);text-decoration:underline;margin-right:14px}
@@ -3107,7 +3108,8 @@ const GYA = (() => {
   };
   const MAIL = { 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
     'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team',
-    'order-note': 'Note to the customer', 'order-failed-staff': 'Payment-failed alert to the Avanti team' };
+    'order-note': 'Note to the customer', 'order-failed-staff': 'Payment-failed alert to the Avanti team',
+    'order-artwork-request': 'Artwork upload link', 'order-artwork-reminder': 'Artwork reminder', 'order-artwork-staff': 'Artwork received alert to the Avanti team' };
   const mailName = t => String(t || '').startsWith('copy-') ? `Copy to Avanti: ${mailName(String(t).slice(5))}` : MAIL[t] || String(t || '').replace('order-', '').replace('_', ' ');
   async function orderDetail(main, id) {
     const [o] = await rest(`orders?select=*&id=eq.${enc(id)}`);
@@ -3132,7 +3134,7 @@ const GYA = (() => {
         <div>
           <section class="gya-card"><h3>Items</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Product</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead><tbody>
             ${items.map(i => `<tr><td><b>${esc(i.name)}</b>${Object.keys(i.options || {}).length ? `<div class="gya-opts">${Object.entries(i.options).map(([k, v]) => `<span><em>${esc(k)}:</em> ${esc(v)}</span>`).join('')}</div>` : ''}
-              ${i.artwork ? `<div class="gya-art">${i.artwork.design ? `<span>Design: ${esc(i.artwork.design)}</span>` : ''}${i.artwork.later ? '<span class="gya-warn-t">Customer is supplying artwork later</span>' : ''}
+              ${i.artwork ? `<div class="gya-art">${i.artwork.design ? `<span>Design: ${esc(i.artwork.design)}</span>` : ''}${i.artwork.later ? '<span class="gya-warn-t">Waiting for artwork: customer is supplying it later (upload link emailed)</span>' : ''}${i.artwork.supplied_after ? `<span class="gya-muted">Artwork uploaded by the customer ${dtt(i.artwork.supplied_after)}</span>` : ''}
                 ${(i.artwork.files || []).map(f => `<span>${esc(f.side)}: ${esc(f.name)} ${f.path ? `<button class="gya-btn gya-btn-line gya-btn-sm" data-dl="${esc(f.path)}">Download</button>` : '<em class="gya-warn-t">not uploaded</em>'}${f.info ? `<small class="gya-muted"> ${esc(f.info)}</small>` : ''}</span>`).join('')}</div>` : ''}</td>
               <td>${i.qty}</td><td>${$c(i.unit_cents)}</td><td>${$c(i.line_cents)}</td></tr>`).join('')}
             <tr><td colspan="3">Delivery${o.delivery_method ? `<div class="gya-muted">${esc(o.delivery_method)}</div>` : ''}${o.delivery_quote_required ? '<div class="gya-warn-t">Some items need a courier quote</div>' : ''}</td><td>${$c(o.delivery_cents)}</td></tr>
@@ -3151,7 +3153,7 @@ const GYA = (() => {
             <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
             ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
           <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
-            ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}</div>
+            ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}${items.some(i => i.artwork && i.artwork.later) && ['paid', 'in_production'].includes(o.status) ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="artwork">Resend artwork upload link</button>' : ''}</div>
               <p class="gya-muted gya-small">Each email goes out once automatically. Resend sends it again, even if it went before.</p>` : ''}</section>
         </div></div>`;
     // let staff know before they act if emails won't go out (never blocks the page)
@@ -3183,9 +3185,9 @@ const GYA = (() => {
       const first = qs(to === 'dispatched' ? '[name=tracking]' : '#odGo', form); if (first) first.focus();
     });
     qsa('[data-resend]', main).forEach(b => b.onclick = () => {
-      const staff = b.dataset.resend === 'staff';
-      if (!confirm(staff ? 'Send the new-order alert to the Avanti team again?' : `Send the ${mailName('order-' + o.status).toLowerCase()} email to ${o.email} again?`)) return;
-      busy(b, async () => { const r = await server('order-resend-email', { order_id: o.id, which: staff ? 'staff' : 'customer' });
+      const which = b.dataset.resend, staff = which === 'staff';
+      if (!confirm(staff ? 'Send the new-order alert to the Avanti team again?' : which === 'artwork' ? `Email ${o.email} the link to upload their artwork again?` : `Send the ${mailName('order-' + o.status).toLowerCase()} email to ${o.email} again?`)) return;
+      busy(b, async () => { const r = await server('order-resend-email', { order_id: o.id, which });
         toast(r.status === 'failed' ? 'The email could not be sent. See the timeline for details.' : `Email ${r.status === 'logged' ? 'recorded' : 'sent'} to ${r.to}`, r.status === 'failed'); orderDetail(main, id); });
     });
     qs('#odNoteBtn', main).onclick = e => { const n = qs('#odNote', main).value.trim(); if (!n) return;
@@ -4669,6 +4671,34 @@ async function uploadArtwork(lines){
   saveCart();
 }
 
+// "Supply artwork later": the customer uploads it here from the link in their email.
+function artUploadHtml(o){
+  const need=(o.items||[]).filter(i=>i.artwork_later);
+  if(!need.length || !o.can_upload_artwork) return need.length?`<div class="co-note" id="ordArt">We're waiting on your artwork for ${need.map(i=>esc(i.name)).join(', ')}. Please call us on <a href="tel:0297290139">(02) 9729 0139</a>.</div>`:'';
+  return `<section class="co-summary ord-art" id="ordArt"><h3>Upload your artwork</h3>
+    <p class="co-muted co-small">PDF, JPG or PNG, up to 32 MB per file. We'll check your files and send a proof if needed. Prefer to talk it through? Call us on <a href="tel:0297290139">(02) 9729 0139</a>.</p>
+    ${need.map(i=>`<div class="ord-art-item" data-item="${esc(i.id)}"><b>${esc(i.name)}</b> × ${i.qty}${Object.keys(i.options||{}).length?`<br><small class="co-muted">${Object.values(i.options).map(esc).join(' · ')}</small>`:''}
+      <div class="ord-art-row"><input type="file" multiple accept="image/jpeg,image/png,application/pdf" aria-label="Artwork for ${esc(i.name)}"><button type="button" class="btn btn-red btn-sm" data-upload="${esc(i.id)}">Upload</button></div>
+      <p class="co-small ord-art-msg" aria-live="polite"></p></div>`).join('')}</section>`;
+}
+function wireArtUpload(o, id, t, refresh){
+  $$('#ordArt [data-upload]').forEach(b=>b.onclick=async()=>{
+    const box=b.closest('.ord-art-item'), input=box.querySelector('input[type=file]'), msg=box.querySelector('.ord-art-msg');
+    const files=[...input.files];
+    if(!files.length){ msg.textContent='Choose your artwork file first.'; return; }
+    const bad=files.find(f=>!['application/pdf','image/jpeg','image/png'].includes(f.type)), big=files.find(f=>f.size>32*1024*1024);
+    if(bad){ msg.textContent=`${bad.name}: please use a PDF, JPG or PNG.`; return; }
+    if(big){ msg.textContent=`${big.name} is over the 32 MB limit.`; return; }
+    if(files.length>6){ msg.textContent='Up to 6 files at a time, please.'; return; }
+    b.disabled=true; b.textContent='Uploading…'; msg.textContent='';
+    try{
+      const out=[]; for(const f of files){ out.push({name:f.name, size:f.size, path:await uploadArtFile(f, 'Artwork')}); }
+      await apiCall('/checkout?action=artwork', {id, t, item_id:box.dataset.item, files:out});
+      toast('Thanks, we\'ve got your artwork'); refresh();
+    }catch(err){ msg.textContent=err.message; b.disabled=false; b.textContent='Upload'; }
+  });
+}
+
 const ORDER_STEPS=[['paid','Order received'],['in_production','Processing'],['dispatched','Dispatched'],['delivered','Delivered']];
 function pageOrder(){ return `<div class="page-head"><div class="wrap"><span class="eyebrow">Your order</span><h1 id="ordTitle">Checking your order…</h1><p id="ordSub"></p></div></div><div class="wrap ord-wrap" id="ordBody"></div>`; }
 async function wireOrder(id, params){
@@ -4680,12 +4710,15 @@ async function wireOrder(id, params){
     const at=ORDER_STEPS.findIndex(s=>s[0]===o.status);
     $('#ordBody').innerHTML = `${done.includes(o.status)?`<ol class="ord-steps">${ORDER_STEPS.map((s,i)=>`<li class="${i<=at?'on':''}"><span>${i+1}</span>${s[1]}</li>`).join('')}</ol>`:''}
       ${o.tracking_url||o.tracking_number?`<div class="co-note">Sent with ${esc(o.carrier||'our courier')}${o.tracking_number?`, tracking number <b>${esc(o.tracking_number)}</b>`:''}. ${o.tracking_url?`<a href="${esc(o.tracking_url)}" target="_blank" rel="noopener">Track your delivery</a>`:''}</div>`:''}
-      <div class="co-summary ord-sum"><h3>Order ${esc(o.number)}</h3>${o.items.map(i=>`<div class="co-row"><span><b>${esc(i.name)}</b> × ${i.qty}${Object.keys(i.options||{}).length?`<br><small class="co-muted">${Object.values(i.options).map(esc).join(' · ')}</small>`:''}${i.artwork_later?'<br><small class="co-muted">Artwork to follow</small>':''}</span><span>${cents$(i.line_cents)}</span></div>`).join('')}
+      <div class="co-summary ord-sum"><h3>Order ${esc(o.number)}</h3>${o.items.map(i=>`<div class="co-row"><span><b>${esc(i.name)}</b> × ${i.qty}${Object.keys(i.options||{}).length?`<br><small class="co-muted">${Object.values(i.options).map(esc).join(' · ')}</small>`:''}${i.artwork_later?'<br><small class="co-muted">Artwork to follow</small>':(i.artwork_files||[]).length?`<br><small class="co-muted">Artwork: ${(i.artwork_files||[]).map(esc).join(', ')}</small>`:''}</span><span>${cents$(i.line_cents)}</span></div>`).join('')}
       <div class="co-row"><span>Delivery${o.delivery_method?`<br><small class="co-muted">${esc(o.delivery_method)}</small>`:''}</span><span>${cents$(o.delivery_cents)}</span></div>
       <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(o.total_cents)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(o.gst_cents)}</div>
       ${o.delivery_quote_required?'<p class="co-muted co-small">Courier delivery for some items will be quoted separately before dispatch.</p>':''}</div>
+      ${artUploadHtml(o)}
       <p style="margin-top:24px"><a class="btn btn-line" href="#/shop">Keep shopping</a> <a class="btn btn-line" href="#/contact">Questions? Contact us</a></p>`;
     if(done.includes(o.status) && cart.lines.length) clearCart();
+    wireArtUpload(o, id, t, tick);
+    if(params.get('artwork') && !window.__artScrolled){ const box=$('#ordArt'); if(box){ window.__artScrolled=true; box.scrollIntoView({behavior:'smooth',block:'start'}); } }
   };
   const tick=async()=>{ if(!location.hash.startsWith('#/order/')) return;
     try{ const o=await apiCall(`/checkout?action=status&id=${encodeURIComponent(id)}&t=${encodeURIComponent(t||'')}`); draw(o);

@@ -5,7 +5,7 @@
 // in try/catch, problems are written to the order's timeline, and the change itself stands.
 import { config, storageSign } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
-import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail } from './email.js';
+import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail, artworkRequestEmail, artworkReceivedEmail, needsArtwork } from './email.js';
 
 // Staff can switch order emails off instantly in the dashboard (server-only flag "order_emails" = false).
 // ORDER_EMAILS_ENABLED=false in Vercel switches them off too. If the flag can't be read, behave as before.
@@ -64,9 +64,9 @@ export async function sendCustomerNote(d, o, note, cfg = config()) {
 
 // The customer's uploaded artwork, with a 30-day download link for each file.
 const ATTACH_LIMIT = 12 * 1024 * 1024, ATTACH_MAX = 6;   // attach up to 6 files totalling 12 MB (inbox limits are ~25 MB)
-async function artworkFiles(o, cfg) {
+async function artworkFiles(o, cfg, items = o.items || []) {
   const list = [];
-  for (const i of o.items || []) for (const f of (i.artwork && i.artwork.files) || []) if (f.path) list.push({ i, f });
+  for (const i of items) for (const f of (i.artwork && i.artwork.files) || []) if (f.path) list.push({ i, f });
   // links are made in parallel so a big order never holds up the payment
   return Promise.all(list.slice(0, 40).map(async ({ i, f }) => {
     let url = null;
@@ -99,6 +99,45 @@ async function sendFailedAlert(d, o, cfg) {
   return sendEmail(d, { kind: 'transactional', template: 'order-failed-staff', to, order_id: o.id, replyTo: o.email, ...staffOrderEmail(o, cfg, 'failed') }, cfg);
 }
 
+// Customers who chose "supply artwork later": an email with a link to upload it (and one reminder).
+export async function sendArtworkRequest(d, o, { force = false, reminder = false, cfg = config() } = {}) {
+  if (!needsArtwork(o).length) return { skipped: 'no artwork needed' };
+  const template = reminder ? 'order-artwork-reminder' : 'order-artwork-request';
+  if (!force && await alreadySent(d, o.id, template)) return { skipped: 'already sent' };
+  const m = artworkRequestEmail(o, cfg, { reminder });
+  const r = await sendEmail(d, { kind: 'transactional', template, to: o.email, order_id: o.id, customer_id: o.customer_id, ...m }, cfg);
+  if (r.status !== 'failed') await sendCopy(d, o, template, m, cfg);
+  return r;
+}
+
+// The customer uploaded artwork from their order page: record it on the item, note it on the
+// timeline and tell the Avanti team (files attached when small enough, always with links).
+export async function receiveArtwork(d, o, item, files, cfg = config()) {
+  const art = item.artwork || {};
+  const now = new Date().toISOString();
+  const added = files.map(f => ({ side: 'Artwork', name: f.name, path: f.path, size: f.size || null, info: 'Uploaded after checkout', uploaded_at: now }));
+  const artwork = { ...art, later: false, supplied_after: now, files: [...(art.files || []).filter(f => f.path), ...added].slice(0, 12) };
+  await d.update('order_items', `id=eq.${item.id}`, { artwork });
+  item.artwork = artwork;
+  await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: 'customer',
+    note: `Customer uploaded artwork for ${item.name}: ${added.map(f => f.name).join(', ')}` });
+  try {
+    if (!(await orderEmailsOn(d, cfg))) return;
+    const to = cfg.email.adminNotify;
+    if (!to || to === 'off') return;
+    const links = await artworkFiles(o, cfg, [{ ...item, artwork: { files: added } }]);
+    const total = links.reduce((t, f) => t + (f.size || 0), 0);
+    const canAttach = links.length <= ATTACH_MAX && links.every(f => f.url && f.size) && total <= ATTACH_LIMIT;
+    const base = { kind: 'transactional', template: 'order-artwork-staff', to, order_id: o.id, replyTo: o.email };
+    let r = canAttach ? await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { attached: true }), attachments: links.map(f => ({ filename: f.name, path: f.url })) }, cfg) : null;
+    if (!r || r.status === 'failed') r = await sendEmail(d, { ...base, ...artworkReceivedEmail(o, item, links, cfg, { notAttached: r ? 'failed' : 'size' }) }, cfg);
+    if (r.status === 'failed') await timelineNote(d, o, `Artwork email to the Avanti team failed: ${String(r.error || '').slice(0, 300)}`);
+  } catch (err) {
+    console.error('receiveArtwork: staff email failed', o.id, err);
+    await timelineNote(d, o, `Artwork email to the Avanti team could not be sent: ${String(err.message).slice(0, 300)}`).catch(() => {});
+  }
+}
+
 // opts.notify = false: staff unticked "Email the customer" for this change.
 export async function afterTransition(d, orderId, from, to, cfg = config(), opts = {}, meta = {}) {
   let o = null;
@@ -128,6 +167,10 @@ export async function afterTransition(d, orderId, from, to, cfg = config(), opts
     else {
       const r = await sendOrderEmail(d, o, to, { cfg });
       if (r && r.status === 'failed') await timelineNote(d, o, `Email to the customer failed: ${String(r.error || '').slice(0, 300)}`);
+      if (to === 'paid') {   // chose "supply artwork later": send the upload link straight away
+        const a = await sendArtworkRequest(d, o, { cfg });
+        if (a && a.status === 'failed') await timelineNote(d, o, `Artwork upload email to the customer failed: ${String(a.error || '').slice(0, 300)}`);
+      }
     }
   } catch (err) {
     console.error('afterTransition: email failed', orderId, err);

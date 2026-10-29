@@ -1,9 +1,11 @@
 // /api/checkout?action=config|quote|create|status|paypal-return|simulate
-import { config, db, handle, json, html, redirect, readJson, HttpError, escHtml as e, money, clientIp } from './_lib/core.js';
+import { config, db, handle, json, html, redirect, readJson, HttpError, escHtml as e, money, clientIp, storageSign } from './_lib/core.js';
 import { quote, createPendingOrder, loadOrder } from './_lib/orders.js';
 import { stripeCheckout, paypalCheckout, paypalCapture, stripeSign } from './_lib/payments.js';
-import { markPaid } from './_lib/effects.js';
+import { markPaid, receiveArtwork } from './_lib/effects.js';
 import { receive } from './webhooks.js';
+
+const UPLOAD_OK = ['paid', 'in_production'];   // artwork can be added online until the order is dispatched
 
 function providers(cfg) {
   const list = [];
@@ -22,7 +24,9 @@ export const GET = handle(async (req) => {
     if (!o || o.public_token !== u.searchParams.get('t')) throw new HttpError(404, 'Order not found.');
     const { trackingUrl } = await import('./_lib/email.js');
     return json({ number: o.number, status: o.status, email: o.email, created_at: o.created_at, paid_at: o.paid_at,
-      items: o.items.map(i => ({ name: i.name, options: i.options, qty: i.qty, line_cents: i.line_cents, artwork_later: !!(i.artwork && i.artwork.later) })),
+      items: o.items.map(i => ({ id: i.id, name: i.name, options: i.options, qty: i.qty, line_cents: i.line_cents, artwork_later: !!(i.artwork && i.artwork.later),
+        artwork_files: ((i.artwork && i.artwork.files) || []).filter(f => f.path).map(f => f.name) })),
+      can_upload_artwork: UPLOAD_OK.includes(o.status),
       subtotal_cents: o.subtotal_cents, delivery_cents: o.delivery_cents, delivery_method: o.delivery_method, total_cents: o.total_cents, gst_cents: o.gst_cents,
       delivery_quote_required: o.delivery_quote_required, carrier: o.carrier, tracking_number: o.tracking_number, tracking_url: trackingUrl(o) || null });
   }
@@ -59,6 +63,27 @@ export const GET = handle(async (req) => {
 
 export const POST = handle(async (req) => {
   const cfg = config(), u = new URL(req.url), action = u.searchParams.get('action');
+
+  // Artwork the customer said they'd send later, uploaded from the link in their email.
+  // The browser uploads the files to the private artwork store first, then reports them here.
+  if (action === 'artwork') {
+    const b = await readJson(req), d = db(cfg), o = await loadOrder(d, b.id || '');
+    if (!o || o.public_token !== b.t) throw new HttpError(404, 'Order not found.');
+    if (!UPLOAD_OK.includes(o.status)) throw new HttpError(409, `This order is ${o.status === 'dispatched' || o.status === 'delivered' ? 'already on its way' : 'no longer active'}, so artwork can't be added online. Please call us.`);
+    const item = o.items.find(i => String(i.id) === String(b.item_id));
+    if (!item) throw new HttpError(404, 'That item is not part of this order.');
+    const files = (Array.isArray(b.files) ? b.files : []).slice(0, 6).map(f => ({ name: String(f.name || '').slice(0, 200) || 'artwork', path: String(f.path || ''), size: Number.isFinite(+f.size) && +f.size > 0 ? Math.round(+f.size) : null }));
+    if (!files.length) throw new HttpError(400, 'Choose your artwork file first.');
+    if (((item.artwork && item.artwork.files) || []).filter(f => f.path).length + files.length > 12) throw new HttpError(409, "We've already got several files for this item. If you need to change them, please call us.");
+    for (const f of files) {
+      if (!/^incoming\/[\w-]{8,64}\/[^/]{1,240}$/.test(f.path)) throw new HttpError(400, "That upload didn't work. Please try again.");
+      try { await storageSign(cfg, 'artwork', f.path, 60); }   // the file must really be in the store
+      catch (err) { throw new HttpError(400, `We couldn't find ${f.name}. Please upload it again.`); }
+    }
+    await receiveArtwork(d, o, item, files, cfg);
+    const left = o.items.filter(i => i.artwork && i.artwork.later && !(i.artwork.files || []).some(f => f.path)).length;
+    return json({ ok: true, remaining: left });
+  }
 
   if (action === 'quote') {
     const body = await readJson(req);

@@ -2,7 +2,7 @@
 // Reads happen straight from the database with row-level security; anything that changes an
 // order, sends email or touches consent comes through here so it is validated and audited.
 import { config, db, handle, json, readJson, requireAdmin, HttpError, audit } from './_lib/core.js';
-import { move, sendOrderEmail, sendStaffAlert, sendCustomerNote, orderEmailsOn, flag } from './_lib/effects.js';
+import { move, sendOrderEmail, sendStaffAlert, sendCustomerNote, sendArtworkRequest, orderEmailsOn, flag } from './_lib/effects.js';
 import { loadOrder } from './_lib/orders.js';
 import { CARRIERS, marketingEmail } from './_lib/email.js';
 import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, subscribe, unsubscribe, runScheduled, runAutomations } from './_lib/marketing.js';
@@ -34,11 +34,12 @@ export const POST = handle(async (req) => {
       if (!o) throw new HttpError(404, 'Order not found.');
       if (!o.paid_at) throw new HttpError(409, 'This checkout was never paid, so there is no order email to send.');
       if (!(await orderEmailsOn(d, cfg))) throw new HttpError(409, 'Order emails are switched off. Switch them on in Email log first.');
-      const r = b.which === 'staff' ? await sendStaffAlert(d, o, { force: true, cfg }) : await sendOrderEmail(d, o, o.status, { force: true, cfg });
-      if (r && r.skipped) throw new HttpError(409, r.skipped === 'no staff address' ? 'No staff email address is set (ADMIN_NOTIFICATION_EMAIL).' : 'There is no email for this status.');
+      const which = ['staff', 'artwork'].includes(b.which) ? b.which : 'customer';
+      const r = which === 'staff' ? await sendStaffAlert(d, o, { force: true, cfg }) : which === 'artwork' ? await sendArtworkRequest(d, o, { force: true, cfg }) : await sendOrderEmail(d, o, o.status, { force: true, cfg });
+      if (r && r.skipped) throw new HttpError(409, r.skipped === 'no staff address' ? 'No staff email address is set (ADMIN_NOTIFICATION_EMAIL).' : r.skipped === 'no artwork needed' ? 'This order is not waiting on any artwork.' : 'There is no email for this status.');
       await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who,
-        note: `${b.which === 'staff' ? 'New-order email to staff' : 'Status email to the customer'} resent (${r.status === 'failed' ? 'failed' : r.status}).` });
-      await audit(d, who, 'order.email_resend', 'order', o.id, { which: b.which === 'staff' ? 'staff' : 'customer', status: r.status });
+        note: `${{ staff: 'New-order email to staff', artwork: 'Artwork upload link to the customer', customer: 'Status email to the customer' }[which]} resent (${r.status === 'failed' ? 'failed' : r.status}).` });
+      await audit(d, who, 'order.email_resend', 'order', o.id, { which, status: r.status });
       return json({ status: r.status, to: r.to_email });
     }
     case 'email-settings': {   // what the dashboard shows on the Email log page

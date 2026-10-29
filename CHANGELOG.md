@@ -19,7 +19,15 @@ Artwork and delivery (from order AVP-1002):
 - Artwork uploads when the item is added to the cart, so a refresh before checkout can't lose it.
 - If chosen artwork never arrived, checkout (browser and server) won't take payment and asks the
   customer to add it again, instead of quietly marking it "supply later".
-- "Supply artwork later" stays. Those customers' confirmation email asks them to reply with their files.
+- "Supply artwork later" stays, and is now followed up automatically (client revision, 29 Oct):
+  - the customer gets an "Upload your artwork" email with a button to a secure upload page for
+    their order (and the same button in their confirmation), plus Avanti's phone number;
+  - one reminder goes out if nothing has arrived after 2 days (daily job);
+  - Avanti's new-order email is marked "(artwork to follow)" with the customer's phone number;
+  - when the customer uploads, Avanti gets an "Artwork received" email with the files attached
+    (or download links), the files appear on the order, and the timeline records it;
+  - the dashboard shows "Waiting for artwork" and has a "Resend artwork upload link" button;
+  - uploads are accepted until the order is dispatched (up to 12 files per item).
 - Items with no delivery price can't be paid with $0 delivery: the cart and checkout ask the
   customer to call or email for a quote.
 - WebP images are no longer offered for artwork (the artwork store doesn't accept them).

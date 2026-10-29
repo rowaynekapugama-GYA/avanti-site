@@ -811,7 +811,7 @@ test('artwork the customer chose to upload must have arrived before payment', as
   r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: body({ later: true }) });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   await postStripe(stripeEvent({ order_id: r.data.order_id, row: await d.one('orders', `select=*&id=eq.${r.data.order_id}`) }));
-  assert.match(customerMail().at(-1).text, /reply to this email and attach your files/);
+  assert.ok(customerMail().some(m => /^Upload your artwork for order/.test(m.subject)));
   const path = await upload('logo.pdf', 1000);
   r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: body({ files: [{ side: 'Front', name: 'logo.pdf', path, size: 1000 }, { side: 'Back', name: 'Same as front', copy: true }] }) });
   assert.equal(r.status, 201, JSON.stringify(r.data));
@@ -872,4 +872,65 @@ test('second review: one staff address from a list, honest note wording, attachm
   const s = staffMail().at(-1);
   assert.equal(s.attachments, undefined); assert.equal((s.html.match(/>Download</g) || []).length, 8);
   assert.match(s.text, /too large \(or too many\) to attach/);
+});
+
+// ======================= "Supply artwork later" follow-up =======================
+test('supply later: upload link emailed, Avanti told, customer uploads, team gets the files, one reminder', async () => {
+  await reset(); await rateFor('mailer-boxes');
+  const o = await newOrder('stripe', { lines: [{ ...MAILER, art: { later: true } }, LINE_BANNER], delivery: { 'test-packaging': 'Metro', 'pull-up-banners': 'Metro NSW delivery' } });
+  await postStripe(stripeEvent(o));
+  // the customer: confirmation with the button, plus a separate upload email
+  const conf = customerMail().find(m => /^Order confirmed/.test(m.subject));
+  assert.match(conf.html, /Upload your artwork/); assert.match(conf.text, new RegExp(`#/order/${o.order_id}\\?t=${o.token}&artwork=1`));
+  const req = customerMail().find(m => /^Upload your artwork for order/.test(m.subject));
+  assert.ok(req); assert.match(req.text, /Custom Branded Mailer Boxes|Mailer/i); assert.match(req.text, /9729 0139/);
+  assert.doesNotMatch(req.text, /Banner/);                                       // only the item that needs artwork
+  // Avanti: the new-order email flags it, with the customer's phone
+  const alert = staffMail().find(m => /^New order/.test(m.subject));
+  assert.match(alert.subject, /\(artwork to follow\)$/); assert.match(alert.text, /ARTWORK TO FOLLOW/); assert.match(alert.text, /0400 000 000/);
+  // the order page knows what's needed
+  let st = await call(checkout.GET, `/api/checkout?action=status&id=${o.order_id}&t=${o.token}`);
+  const item = st.data.items.find(i => i.artwork_later);
+  assert.ok(item && item.id); assert.equal(st.data.can_upload_artwork, true);
+  // bad attempts are refused
+  const up = body => call(checkout.POST, '/api/checkout?action=artwork', { method: 'POST', body });
+  assert.equal((await up({ id: o.order_id, t: '00000000-0000-0000-0000-000000000000', item_id: item.id, files: [{ name: 'a.pdf', path: 'incoming/xxxxxxxx/a.pdf' }] })).status, 404);
+  assert.equal((await up({ id: o.order_id, t: o.token, item_id: item.id, files: [{ name: 'a.pdf', path: 'incoming/12345678-aaaa/never-uploaded.pdf' }] })).status, 400);
+  assert.equal((await up({ id: o.order_id, t: o.token, item_id: item.id, files: [{ name: 'a.pdf', path: '../media/x.pdf' }] })).status, 400);
+  assert.equal((await up({ id: o.order_id, t: o.token, item_id: 999999999, files: [] })).status, 404);
+  // the real upload
+  const path = await upload('logo.pdf', 3000);
+  const r = await up({ id: o.order_id, t: o.token, item_id: item.id, files: [{ name: 'logo.pdf', path, size: 3000 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.remaining, 0);
+  const row = await d.one('order_items', `select=artwork&id=eq.${item.id}`);
+  assert.equal(row.artwork.later, false); assert.equal(row.artwork.files[0].path, path); assert.ok(row.artwork.supplied_after);
+  assert.ok((await events(o.order_id)).some(e => e.actor === 'customer' && /uploaded artwork for .*logo\.pdf/.test(e.note || '')));
+  const got = staffMail().find(m => /^Artwork received for order/.test(m.subject));
+  assert.equal(got.attachments.length, 1); assert.equal(got.reply_to, 'jo.buyer@example.com');
+  assert.match(got.text, /last artwork needed/);
+  st = await call(checkout.GET, `/api/checkout?action=status&id=${o.order_id}&t=${o.token}`);
+  assert.equal(st.data.items.some(i => i.artwork_later), false); assert.deepEqual(st.data.items.find(i => i.id === item.id).artwork_files, ['logo.pdf']);
+  // no reminder once it's in
+  await d.update('orders', `id=eq.${o.order_id}`, { paid_at: new Date(Date.now() - 3 * 86400000).toISOString() });
+  let c = await call(cron.GET, '/api/cron', { headers: { authorization: 'Bearer cron-test-secret' } });
+  assert.equal(c.data.artwork_reminders, 0);
+  // a second order that never sends artwork: one reminder after 2 days, never two
+  const o2 = await newOrder('stripe', { lines: [{ ...MAILER, art: { later: true } }], delivery: { 'test-packaging': 'Metro' } });
+  await postStripe(stripeEvent(o2));
+  c = await call(cron.GET, '/api/cron', { headers: { authorization: 'Bearer cron-test-secret' } });
+  assert.equal(c.data.artwork_reminders, 0);                                    // too soon
+  await d.update('orders', `id=eq.${o2.order_id}`, { paid_at: new Date(Date.now() - 3 * 86400000).toISOString() });
+  c = await call(cron.GET, '/api/cron', { headers: { authorization: 'Bearer cron-test-secret' } });
+  assert.equal(c.data.artwork_reminders, 1);
+  c = await call(cron.GET, '/api/cron', { headers: { authorization: 'Bearer cron-test-secret' } });
+  assert.equal(c.data.artwork_reminders, 0);
+  assert.equal(customerMail().filter(m => /^Reminder: we still need your artwork/.test(m.subject)).length, 1);
+  // staff can resend the link; not for an order that has its artwork
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: o2.order_id, which: 'artwork' })).status, 200);
+  assert.equal((await act(adminToken, 'order-resend-email', { order_id: o.order_id, which: 'artwork' })).status, 409);
+  // once dispatched, uploads are refused
+  await act(adminToken, 'order-transition', { order_id: o2.order_id, to: 'in_production' });
+  await act(adminToken, 'order-transition', { order_id: o2.order_id, to: 'dispatched', carrier: 'Toll' === 'x' ? '' : 'Sendle' });
+  const it2 = (await call(checkout.GET, `/api/checkout?action=status&id=${o2.order_id}&t=${o2.token}`)).data.items[0];
+  assert.equal((await up({ id: o2.order_id, t: o2.token, item_id: it2.id, files: [{ name: 'late.pdf', path: await upload('late.pdf', 10), size: 10 }] })).status, 409);
 });

@@ -155,3 +155,15 @@ total 12 MB or less, and always as 30-day download links.
 
 Before deploying this update, every category needs a delivery price (Dashboard > Shipping):
 items without one can no longer be paid for online with $0 delivery.
+
+## Update 29 October 2026: "supply artwork later" follow-up
+
+| Email | Goes to | When |
+| --- | --- | --- |
+| Upload your artwork | Customer, copy to Avanti | Paid order with "supply artwork later" |
+| Reminder: we still need your artwork | Customer, copy to Avanti | 2 days later if nothing uploaded (once) |
+| Artwork received (files attached or linked) | Avanti | The customer uploads from their link |
+
+The upload page is the customer's own order page (`#/order/<id>?t=<token>&artwork=1`), so only
+someone with the emailed link can use it. Files go to the private artwork store; Avanti downloads
+them from the email or the order in the dashboard.

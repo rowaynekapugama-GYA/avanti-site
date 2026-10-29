@@ -131,6 +131,11 @@ export const CARRIERS = {
 };
 export const trackingUrl = (o) => o.tracking_url || (o.tracking_number && CARRIERS[o.carrier] ? CARRIERS[o.carrier](o.tracking_number) : '') || '';
 
+// Items the customer said they'd supply artwork for later, and haven't uploaded yet.
+export const needsArtwork = o => (o.items || []).filter(i => i.artwork && i.artwork.later && !(i.artwork.files || []).some(f => f.path));
+const names = items => [...new Set(items.map(i => i.name))].join(', ');
+export const artworkLink = (o, cfg = config()) => `${cfg.siteUrl}/#/order/${o.id}?t=${o.public_token}&artwork=1`;
+
 // One template per status change the customer hears about.
 const placed = (o, cfg = config()) => o.paid_at || o.created_at ? new Date(o.paid_at || o.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric', timeZone: cfg.timezone }) : '';
 const help = cfg => p(`Questions? Reply to this email, or call us on ${e(cfg.business.phone)}.`);
@@ -143,10 +148,10 @@ export function orderEmail(kind, o, cfg = config()) {
     paid: {
       subject: `Order confirmed: ${o.number}`, pre: `Thanks ${first(o.name)}, we've received your order.`,
       body: h1(`Thanks, ${first(o.name)}. Your order is confirmed.`) + p(`We've received your payment for order <b>${e(o.number)}</b>${placed(o, cfg) ? `, placed on ${e(placed(o, cfg))}` : ''}. We'll let you know when we start working on it.`)
-        + ((o.items || []).some(i => i.artwork && i.artwork.later) ? p('<b>Sending your artwork:</b> just reply to this email and attach your files. We start production once your artwork is approved.') : '')
+        + (needsArtwork(o).length ? p(`<b>Your artwork:</b> you chose to send it later. Upload it any time using the button below (we've also emailed you the link), or call us on ${e(cfg.business.phone)} and we'll help. We start production once your artwork is approved.`) + btn('Upload your artwork', artworkLink(o, cfg)) : '')
         + itemsTable(o) + p(`<b>Delivering to</b><br>${e(o.name)}<br>${e(addressText(o.shipping_address || {}))}`)
         + (o.delivery_quote_required ? p('Some items in this order need a delivery quote. We will contact you to confirm delivery before dispatch.') : '') + btn('View your order', link) + help(cfg),
-      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.${placed(o, cfg) ? ` Placed ${placed(o, cfg)}.` : ''}${(o.items || []).some(i => i.artwork && i.artwork.later) ? '\n\nSending your artwork: just reply to this email and attach your files. We start production once your artwork is approved.' : ''}\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
+      text: `Thanks ${first(o.name)}, your order ${o.number} is confirmed.${placed(o, cfg) ? ` Placed ${placed(o, cfg)}.` : ''}${needsArtwork(o).length ? `\n\nYour artwork: you chose to send it later. Upload it here: ${artworkLink(o, cfg)}\nOr call us on ${cfg.business.phone} and we'll help. We start production once your artwork is approved.` : ''}\n\n${itemsText(o)}\n\nDelivering to: ${o.name}, ${addressText(o.shipping_address || {})}\n\nView your order: ${link}\n\n${helpText(cfg)}`,
     },
     in_production: {
       subject: `Your order ${o.number} is being processed`, pre: "We're working on your order now.",
@@ -198,8 +203,12 @@ export function staffOrderEmail(o, cfg = config(), kind = 'new', { files = [], a
   const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${i.qty > 1 ? ` <span style="color:${MUTED};font-size:13px">at ${money(i.unit_cents)} each</span>` : ''}
 ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${Object.entries(i.options).map(([k, v]) => `${e(k)}: ${e(v)}`).join(' · ')}</span>` : ''}${art(i) ? `<br><span style="color:${MUTED};font-size:13px">${e(art(i))}</span>` : ''}</td>
 <td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
+  const later = failed ? [] : needsArtwork(o);
+  const laterHtml = later.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px"><tr><td style="padding:12px 14px;background:#fff4e0;border-left:3px solid #d98b00;border-radius:0 8px 8px 0;font-size:14px">`
+      + `<b>Artwork to follow</b> for ${e(names(later))}. We've emailed ${e(first(o.name))} a link to upload it${o.phone ? `. To help them along, call them on <b>${e(o.phone)}</b>` : ''}.</td></tr></table>` : '';
+  const laterText = later.length ? `ARTWORK TO FOLLOW for ${names(later)}. We've emailed the customer a link to upload it.${o.phone ? ` To help them along, call them on ${o.phone}.` : ''}\n\n` : '';
   const body = (failed ? h1(`Payment failed: order ${o.number}`) + p(`<b>${e(o.name || o.email)}</b> tried to pay <b>${money(o.total_cents)}</b>${provider ? ` by ${e(provider)}` : ''}, but the payment didn't go through, so the checkout was cancelled automatically. They have not been charged. You may want to get in touch and help them finish the order.`)
-      : h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`))
+      : h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`) + laterHtml)
     + btn('Open the order in the dashboard', admin)
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
 <tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
@@ -207,11 +216,44 @@ ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-si
     + p(`<b>Customer</b><br>${e(o.name || '')}${o.company ? `<br>${e(o.company)}` : ''}<br>${e(o.email)}${o.phone ? `<br>${e(o.phone)}` : ''}`)
     + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '') + (failed ? '' : fileHtml);
   const text = (failed ? `Payment failed for order ${o.number}: ${money(o.total_cents)}${provider ? ` by ${provider}` : ''}. The checkout was cancelled automatically and the customer has not been charged. You may want to get in touch and help them finish the order.\n\n`
-      : `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n`)
+      : `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n${laterText}`)
     + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
     + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
     + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n${failed ? '' : fileText}\nOpen in the dashboard: ${admin}`;
+  if (later.length && !failed) return { subject: `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email} (artwork to follow)`, html: layout({ preheader: `Artwork to follow. ${money(o.total_cents)}`, body, cfg }), text };
   return { subject: failed ? `Payment failed for order ${o.number} (${money(o.total_cents)}, ${o.name || o.email})` : `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };
+}
+
+// "Please upload your artwork" for customers who chose to supply it later (and a reminder 2 days on).
+export function artworkRequestEmail(o, cfg = config(), { reminder = false } = {}) {
+  const items = needsArtwork(o), link = artworkLink(o, cfg);
+  const list = items.map(i => `<li style="margin:0 0 4px">${e(i.name)} × ${i.qty}${Object.keys(i.options || {}).length ? ` <span style="color:${MUTED};font-size:13px">(${e(Object.values(i.options).join(' · '))})</span>` : ''}</li>`).join('');
+  const body = h1(reminder ? 'We still need your artwork' : 'Upload your artwork')
+    + p(reminder ? `Hi ${e(first(o.name))}, just a reminder that we're waiting on your artwork for order <b>${e(o.number)}</b> before we can start printing.`
+      : `Hi ${e(first(o.name))}, thanks for your order <b>${e(o.number)}</b>. You chose to send your artwork later, so here's your link to upload it when it's ready.`)
+    + p('<b>Artwork needed for:</b>') + `<ul style="margin:0 0 14px;padding-left:20px">${list}</ul>`
+    + btn('Upload your artwork', link)
+    + p(`PDF, JPG or PNG, up to 32 MB per file. Prefer to talk it through, or need a hand with the design? Call us on <b>${e(cfg.business.phone)}</b> and we'll help.`)
+    + p("We'll check your files and send a proof if needed. Production starts once your artwork is approved.");
+  const text = `${reminder ? `Hi ${first(o.name)}, a reminder that we're waiting on your artwork for order ${o.number} before we can start printing.` : `Hi ${first(o.name)}, thanks for your order ${o.number}. You chose to send your artwork later, so here's your link to upload it.`}\n\n`
+    + `Artwork needed for:\n${items.map(i => `- ${i.name} x ${i.qty}`).join('\n')}\n\nUpload your artwork: ${link}\n\nPDF, JPG or PNG, up to 32 MB per file. Prefer to talk it through? Call us on ${cfg.business.phone}.\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}`;
+  return { subject: reminder ? `Reminder: we still need your artwork for order ${o.number}` : `Upload your artwork for order ${o.number}`, html: layout({ preheader: 'Upload your artwork when it is ready.', body, cfg }), text };
+}
+
+// To the Avanti team when a customer uploads artwork they said they'd send later.
+export function artworkReceivedEmail(o, item, files, cfg = config(), { attached = false, notAttached = '' } = {}) {
+  const admin = `${cfg.siteUrl}/#/admin/orders/${o.id}`;
+  const why = notAttached === 'size' ? 'The files are too large (or too many) to attach, so use the links. ' : notAttached === 'failed' ? "The files couldn't be attached this time, so use the links. " : '';
+  const rows = files.map(f => `<tr><td style="padding:6px 0;border-bottom:1px solid ${LINE}">${e(f.name)}</td><td align="right" style="padding:6px 0;border-bottom:1px solid ${LINE}">${f.url ? `<a href="${e(f.url)}" style="color:${RED};font-weight:bold">Download</a>` : `<span style="color:${MUTED};font-size:13px">In the dashboard</span>`}</td></tr>`).join('');
+  const left = needsArtwork(o).filter(i => i.id !== item.id);
+  const body = h1(`Artwork received: order ${o.number}`) + p(`<b>${e(o.name || o.email)}</b> uploaded artwork for <b>${e(item.name)}</b> × ${item.qty}${Object.keys(item.options || {}).length ? ` (${e(Object.values(item.options).join(' · '))})` : ''}.`)
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;font-size:14px">${rows}</table>`
+    + p(`<span style="color:${MUTED};font-size:13px">${attached ? 'The files are attached. ' : why}Download links work for 30 days. After that, download the files from the order in the dashboard.</span>`)
+    + (left.length ? p(`Still waiting on artwork for: ${e(names(left))}.`) : p('That was the last artwork needed for this order.'))
+    + btn('Open the order in the dashboard', admin);
+  const text = `${o.name || o.email} uploaded artwork for ${item.name} x ${item.qty} (order ${o.number}).\n\n${files.map(f => `- ${f.name}${f.url ? `\n  ${f.url}` : ''}`).join('\n')}\n${attached ? 'The files are attached. ' : why}Download links work for 30 days.\n`
+    + (left.length ? `\nStill waiting on artwork for: ${names(left)}.` : '\nThat was the last artwork needed for this order.') + `\n\nOpen in the dashboard: ${admin}`;
+  return { subject: `Artwork received for order ${o.number} (${o.name || o.email})`, html: layout({ preheader: `${item.name}: ${files.length} file(s)`, body, cfg }), text };
 }
 
 // A note from the Avanti team to the customer about their order (like WooCommerce's "customer note").

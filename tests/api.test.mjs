@@ -951,3 +951,95 @@ test('supply later: upload link emailed, Avanti told, customer uploads, team get
   const it2 = (await call(checkout.GET, `/api/checkout?action=status&id=${o2.order_id}&t=${o2.token}`)).data.items[0];
   assert.equal((await up({ id: o2.order_id, t: o2.token, item_id: it2.id, files: [{ name: 'late.pdf', path: await upload('late.pdf', 10), size: 10 }] })).status, 409);
 });
+
+// ======================= Shipping calculator (client spec v1.0) =======================
+const shipCart = [{ slug: 'foamboard', qty: 3, opts: { Thickness: 'Foamboard 5mm', Size: '600mm x 400mm', Printing: 'Single Side' } },
+  { slug: 'pull-up-banner', qty: 1, opts: {} }, { slug: 'posters', qty: 2, opts: { Material: 'Poster paper 220GSM, matte or gloss finish', Size: 'A1', Finish: 'Gloss' } }];
+
+test('shipping: simulator gives exactly what checkout charges, from the same engine', async () => {
+  await reset();
+  const sim = await act(adminToken, 'shipping-simulate', { postcode: '2164', lines: shipCart });
+  assert.equal(sim.status, 200, JSON.stringify(sim.data));
+  const q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: shipCart, postcode: '2164' } });
+  assert.deepEqual(sim.data.checkout_view, q.data.shipping);
+  const w = sim.data.working;
+  assert.equal(w.zone.name, 'Sydney Metro'); assert.ok(w.packages.length >= 3);
+  for (const p of w.packages) for (const k of ['length_mm', 'width_mm', 'height_mm', 'weight_g', 'band', 'base', 'charge_bps', 'width_surcharge', 'weight_surcharge', 'packaging', 'contents']) assert.ok(k in p, k);
+  for (const k of ['base_subtotal', 'freight_selling', 'surcharges', 'packaging_cost', 'packaging_selling', 'before_minimum']) assert.ok(k in w.totals, k);
+  assert.equal(w.inc_gst_cents, w.ex_gst_cents + w.gst_cents);
+  // and the order stores the same figure
+  const o = await newOrder('stripe', { lines: shipCart });
+  assert.equal(o.row.shipping_ex_gst_cents, sim.data.checkout_view.ex_gst_cents);
+  // on the live site (approval required) the unapproved zone would be unavailable
+  assert.equal(sim.data.live_view.ok, false); assert.equal(sim.data.live_reason, 'zone_not_approved');
+  // a custom item from the simulator
+  const c = await act(adminToken, 'shipping-simulate', { postcode: '3000', lines: [{ name: 'Test board', qty: 2, spec: { profile: 'rigid', material: 'acm_3mm', length_mm: 1300, width_mm: 650 } }] });
+  assert.equal(c.data.working.zone.name, 'Melbourne Metro'); assert.equal(c.data.working.packages[0].length_mm, 1320);
+  // disabled zones still show the working in the simulator, but no price for customers
+  const r = await act(adminToken, 'shipping-simulate', { postcode: '2830', lines: shipCart });
+  assert.equal(r.data.checkout_view.ok, false); assert.equal(r.data.preview_view.ok, false);
+  assert.equal((await act(editorToken, 'shipping-simulate', { postcode: '2164', lines: shipCart })).status, 403);
+  assert.equal((await act(null, 'shipping-get', {})).status, 401);
+});
+
+test('shipping: settings are versioned; approvals are stamped; orders keep the version they used', async () => {
+  await reset();
+  let g = await act(adminToken, 'shipping-get', {});
+  assert.equal(g.status, 200); const v0 = g.data.version; assert.ok(v0 >= 1);
+  assert.deepEqual(g.data.validation.errors, []);
+  const conf = g.data.config;
+  conf.zones.find(z => z.id === 'syd-metro').approval = { status: 'approved' };
+  conf.zones.find(z => z.id === 'syd-metro').rates.small = 1200;
+  let s = await act(adminToken, 'shipping-save', { config: conf, note: 'Approve Sydney', expect_version: v0 });
+  assert.equal(s.status, 200, JSON.stringify(s.data)); assert.equal(s.data.version, v0 + 1);
+  const syd = s.data.config.zones.find(z => z.id === 'syd-metro');
+  assert.equal(syd.approval.status, 'approved'); assert.equal(syd.approval.by, 'admin:admin@avanti.test'); assert.ok(syd.approval.at);
+  // stale saves are refused; broken settings are refused
+  assert.equal((await act(adminToken, 'shipping-save', { config: conf, expect_version: v0 })).status, 409);
+  const broken = structuredClone(s.data.config); broken.zones[0].ranges = [[3000, 2000]];
+  const bad = await act(adminToken, 'shipping-save', { config: broken, expect_version: v0 + 1 });
+  assert.equal(bad.status, 400); assert.match(bad.data.error, /not valid/);
+  // an order stores the version and its own copy of the working
+  const o = await newOrder('stripe', { lines: shipCart });
+  assert.equal(o.row.shipping_config_version, v0 + 1);
+  // later edits never change a saved order
+  conf.zones.find(z => z.id === 'syd-metro').rates.small = 9900;
+  s = await act(adminToken, 'shipping-save', { config: conf, expect_version: v0 + 1 });
+  assert.equal(s.status, 200);
+  const again = await d.one('orders', `select=shipping_quote,shipping_ex_gst_cents,shipping_config_version&id=eq.${o.order_id}`);
+  assert.deepEqual(again.shipping_quote, o.row.shipping_quote); assert.equal(again.shipping_config_version, v0 + 1);
+  await assert.rejects(d.update('orders', `id=eq.${o.order_id}`, { shipping_ex_gst_cents: 1 }), /immutable/);
+  await assert.rejects(d.update('shipping_config_versions', `version=eq.${v0}`, { note: 'x' }), /read_only/);
+  const hist = await act(adminToken, 'shipping-version', { version: v0 });
+  assert.equal(hist.data.version, v0); assert.equal(hist.data.config.zones.find(z => z.id === 'syd-metro').rates.small, 1100);
+  // the public can't read the settings tables directly
+  const pub = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/shipping_config_versions?select=version`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.doesNotMatch(await pub.text(), /"version"/);
+  // put the starting settings back for the other tests
+  const seedBack = (await act(adminToken, 'shipping-version', { version: v0 })).data.config;
+  await act(adminToken, 'shipping-save', { config: seedBack, note: 'restore', expect_version: v0 + 2 });
+});
+
+test('shipping: manual override keeps the original; courier costs feed profitability', async () => {
+  await reset();
+  const o = await newOrder('stripe', { lines: shipCart }); await postStripe(stripeEvent(o));
+  const calc = o.row.shipping_ex_gst_cents;
+  assert.equal((await act(adminToken, 'shipping-override', { order_id: o.order_id, new_ex_gst_cents: 5000 })).status, 400);   // needs a reason
+  let r = await act(adminToken, 'shipping-override', { order_id: o.order_id, new_ex_gst_cents: 5000, reason: 'Customer collected part of the order' });
+  assert.equal(r.status, 200); assert.equal(r.data.original_ex_gst_cents, calc);
+  r = await act(adminToken, 'shipping-override', { order_id: o.order_id, new_ex_gst_cents: 4500, reason: 'Second thought' });
+  assert.equal(r.data.original_ex_gst_cents, 5000);
+  const row = await d.one('orders', `select=shipping_ex_gst_cents,shipping_override_ex_gst_cents,shipping_quote&id=eq.${o.order_id}`);
+  assert.equal(row.shipping_ex_gst_cents, calc); assert.equal(row.shipping_override_ex_gst_cents, 4500); assert.ok(row.shipping_quote.packages);
+  const hist = await d.select('shipping_overrides', `select=*&order_id=eq.${o.order_id}&order=created_at`);
+  assert.equal(hist.length, 2); assert.equal(hist[0].actor, 'admin:admin@avanti.test'); assert.equal(hist[0].reason, 'Customer collected part of the order');
+  await act(adminToken, 'shipping-courier', { order_id: o.order_id, kind: 'cost', amount_cents: 3100, carrier: 'Transdirect' });
+  await act(adminToken, 'shipping-courier', { order_id: o.order_id, kind: 'adjustment', amount_cents: 400, note: 'Re-weigh' });
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+  const p = await act(adminToken, 'shipping-profit', { from: today, to: today });
+  assert.equal(p.status, 200, JSON.stringify(p.data));
+  const line = p.data.rows.find(x => x.id === o.order_id);
+  assert.equal(line.charged_ex_gst_cents, 4500); assert.equal(line.actual_cents, 3500); assert.equal(line.margin_cents, 1000); assert.equal(line.overridden, true);
+  assert.equal(p.data.totals.margin_cents, 1000);
+  assert.equal((await act(editorToken, 'shipping-override', { order_id: o.order_id, new_ex_gst_cents: 1, reason: 'x' })).status, 403);
+});

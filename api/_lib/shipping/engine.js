@@ -80,11 +80,40 @@ function sizeOf(opts, config) {
   const d = parseDims(raw);
   return d.length >= 2 ? { dims: d } : null;
 }
+// Simulator custom item: { profile, material, length_mm, width_mm } (rigid/flat/rolled),
+// { profile:'unit', length_mm, width_mm, height_mm, weight_g, per_package } or { profile:'unit', unit },
+// { profile:'flatpack', board, formula, box_mm:[L,W,H] }, { profile:'wallpaper', material, wall_w_mm, wall_h_mm }
+function customItem(spec, qty, name, config) {
+  const n = v => Math.round(Number(v));
+  const pos = v => n(v) > 0;
+  const p = spec.profile;
+  if (p === 'rigid' || p === 'flat' || p === 'rolled') {
+    if (!(config.materials || {})[spec.material]) fail('no_material', name);
+    if (!pos(spec.length_mm) || !pos(spec.width_mm)) fail('no_size', name);
+    return { profile: p, name, qty, material: spec.material, length_mm: Math.max(n(spec.length_mm), n(spec.width_mm)), width_mm: Math.min(n(spec.length_mm), n(spec.width_mm)) };
+  }
+  if (p === 'unit') {
+    if (spec.unit) { if (!(config.units || {})[spec.unit]) fail('no_unit_model', name); return { profile: p, name, qty, unit: spec.unit }; }
+    if (![spec.length_mm, spec.width_mm, spec.height_mm, spec.weight_g].every(pos)) fail('no_size', name);
+    return { profile: p, name, qty, model: { label: name, length_mm: n(spec.length_mm), width_mm: n(spec.width_mm), height_mm: n(spec.height_mm), weight_g: n(spec.weight_g), per_package: Math.max(1, n(spec.per_package) || 1) } };
+  }
+  if (p === 'flatpack') {
+    if (!((config.flatpack && config.flatpack.boards) || {})[spec.board]) fail('no_board', name);
+    const box = (spec.box_mm || []).map(n);
+    if (box.length !== 3 || !box.every(v => v > 0)) fail('no_size', name);
+    return { profile: p, name, qty, board: spec.board, formula: spec.formula === 'mailer' ? 'mailer' : 'rsc', box_mm: box, size_key: box.join(' × ') };
+  }
+  if (p === 'wallpaper') {
+    if (!pos(spec.wall_w_mm) || !pos(spec.wall_h_mm)) fail('no_size', name);
+    return { profile: p, name, qty, material: (config.materials || {})[spec.material] ? spec.material : 'wallpaper_smooth', wall_w_mm: n(spec.wall_w_mm), wall_h_mm: n(spec.wall_h_mm) };
+  }
+  fail('unknown_profile', name);
+}
 // line: { slug, name, category, qty, opts } from the cart, or { spec } (simulator custom item)
 export function resolveItem(line, config) {
   const qty = Math.floor(Number(line.qty));
   if (!(qty >= 1)) fail('bad_quantity', line.name);
-  if (line.spec) return { ...line.spec, qty, name: line.name || line.spec.name || 'Custom item' };
+  if (line.spec) return customItem(line.spec, qty, line.name || line.spec.name || 'Custom item', config);
   const m = profileFor(line, config), name = line.name || line.slug;
   let profile = m.profile;
   if (!profile) fail('no_shipping_profile', name);
@@ -272,7 +301,7 @@ function packWallpaper(items, config) {
 function packUnits(items, config) {
   const prof = config.profiles.unit, out = [];
   for (const it of items) {
-    const u = config.units[it.unit];
+    const u = it.model || config.units[it.unit];
     let left = it.qty;
     while (left > 0) {
       let n = Math.min(left, Math.max(1, u.per_package || 1));

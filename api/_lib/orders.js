@@ -1,6 +1,8 @@
 // Pricing, delivery and orders. Totals are always recalculated here from the database;
 // whatever the browser says a line costs is ignored.
 import { HttpError, cents, audit, config } from './core.js';
+import { loadShippingConfig, shippingFor } from './shipping/store.js';
+import { UNAVAILABLE, METHOD, serialiseQuote } from './shipping/engine.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -102,37 +104,47 @@ export async function quote(d, body) {
     return { position: i, product_slug: p.slug, name: p.name, category_slug: p.category_slug, options: opts, qty,
       unit_cents: unit, line_cents: unit * qty, artwork };
   });
-  const delivery = deliveryOptions(cat, lines);
-  const chosen = body.delivery || {};
-  let deliveryCents = 0; const picked = [];
-  for (const g of delivery.groups) {
-    const o = g.options.find(o => o.label === chosen[g.group]) || null;
-    if (body.requireDelivery && !o) throw new HttpError(400, `Please choose a delivery option for ${g.label}.`);
-    const use = o || g.options[0];
-    deliveryCents += use.cents; picked.push(`${g.label}: ${use.label}`);
+  // Delivery: one "Standard Delivery" price from the shipping calculator, for the customer's postcode.
+  // Product prices include GST; the delivery price is worked out ex GST and GST is added to it.
+  const postcode = body.postcode || (body.customer && body.customer.address && body.customer.address.postcode) || '';
+  let shipping = null;
+  if (String(postcode).trim()) {
+    const loaded = await loadShippingConfig(d);
+    shipping = shippingFor(lines.map(l => ({ slug: l.product_slug, category: l.category_slug, name: l.name, qty: l.qty, opts: l.options })), postcode, loaded, config());
   }
+  const deliveryCents = shipping && shipping.ok ? shipping.inc_gst_cents : 0;
   const subtotal = lines.reduce((s, l) => s + l.line_cents, 0), total = subtotal + deliveryCents;
-  return { lines, delivery, deliveryCents, deliveryMethod: picked.join('; ') || null, subtotal, total,
-    gst: Math.round(total / 11),   // prices include GST
-    quoteRequired: delivery.quote, quoteItems: delivery.quoteItems };
+  return { lines, shipping, deliveryCents, deliveryMethod: shipping && shipping.ok ? METHOD : null, subtotal, total,
+    gst: Math.round(subtotal / 11) + (shipping && shipping.ok ? shipping.gst_cents : 0) };
 }
 
 export async function createPendingOrder(d, body) {
   const cust = validateCustomer(body.customer);
-  const q = await quote(d, { ...body, requireDelivery: true });
-  // no unpriced ($0) delivery: items without a delivery rate are quoted by the team first
-  if (q.quoteRequired) throw new HttpError(400, `Delivery for ${q.quoteItems.join(', ')} needs a quote before you can pay. Please call us on ${config().business.phone} or email ${config().business.email} and we'll quote it and take your order.`);
+  const q = await quote(d, { ...body, postcode: cust.address.postcode });
+  // no delivery price for this postcode (or this cart): never fall back to a cheaper rate
+  if (!q.shipping || !q.shipping.ok) throw new HttpError(400, UNAVAILABLE);
   // artwork the customer chose to upload must have arrived (Lauren's order, 27 Oct 2026: files lost on reload)
   const noFile = q.lines.find(l => l.artwork && !l.artwork.later && !l.artwork.design && (l.artwork.files || []).some(f => !f.path && !f.copy));
   if (noFile) throw new HttpError(400, `The artwork for ${noFile.name} didn't upload. Please remove it from your cart and add it again with your file, or choose "supply artwork later".`);
   const campaign = /^[0-9a-f-]{36}$/.test(body.campaign_id || '') ? body.campaign_id : null;
-  const [order] = await d.insert('orders', {
+  const row = {
     email: cust.email, name: cust.name, phone: cust.phone, company: cust.company, shipping_address: cust.address,
-    delivery_method: q.deliveryMethod, delivery_cents: q.deliveryCents, delivery_quote_required: q.quoteRequired,
+    delivery_method: q.deliveryMethod, delivery_cents: q.deliveryCents, delivery_quote_required: false,
     subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst, currency: 'AUD',
     provider: body.provider, marketing_opt_in: !!body.marketing_opt_in, campaign_id: campaign,
     customer_note: String(body.note || '').trim().slice(0, 1000) || null,
-  });
+  };
+  // the full shipping calculation, saved with the order and never changed afterwards
+  const ship = { shipping_quote: serialiseQuote(q.shipping), shipping_config_version: q.shipping.config_version,
+    shipping_postcode: q.shipping.postcode, shipping_zone: q.shipping.zone && q.shipping.zone.name, shipping_ex_gst_cents: q.shipping.ex_gst_cents };
+  let order, saved = true;
+  try { [order] = await d.insert('orders', { ...row, ...ship }); }
+  catch (e) {   // database update 005 not run yet: take the order anyway, and say so on its timeline
+    if (!/shipping_/.test(String(e.message))) throw e;
+    [order] = await d.insert('orders', row); saved = false;
+  }
+  if (!saved) await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'system',
+    note: `Shipping calculation not saved (run database update 005): ${q.shipping.zone && q.shipping.zone.name}, settings version ${q.shipping.config_version}, ${q.shipping.packages.length} package(s), $${(q.shipping.ex_gst_cents / 100).toFixed(2)} ex GST.` });
   await d.insert('order_items', q.lines.map(l => ({ ...l, order_id: order.id })));
   await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'customer',
     note: `Checkout started with ${body.provider}`, data: { total_cents: q.total } });

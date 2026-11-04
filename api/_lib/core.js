@@ -48,6 +48,9 @@ export function config() {
       adminList: adminList(E('ADMIN_NOTIFICATION_EMAIL', 'info@avantiprint.com.au, rowayne@gyaclients.com')),
     },
     timezone: E('BUSINESS_TIMEZONE', 'Australia/Sydney').trim() || 'Australia/Sydney',
+    // Shipping zones must be approved in the dashboard before they price on the live site.
+    // Default: approval required everywhere except Vercel preview/development deployments.
+    shipping: { requireApproval: E('SHIPPING_REQUIRE_APPROVAL', ['preview', 'development'].includes(E('VERCEL_ENV')) ? 'false' : 'true').trim().toLowerCase() !== 'false' },
     business: {   // shown in every email footer (the Spam Act requires sender identification)
       name: E('BUSINESS_NAME', 'Avanti Print & Design'),
       abn: E('BUSINESS_ABN', ''),

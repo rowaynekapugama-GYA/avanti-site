@@ -13,7 +13,7 @@ Object.assign(process.env, {
   SITE_URL: 'https://shop.test', SUPABASE_URL: T.TEST_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: T.TEST_SERVICE_KEY, SUPABASE_ANON_KEY: T.TEST_ANON_KEY,
   STRIPE_SECRET_KEY: 'rk_test_123', STRIPE_WEBHOOK_SECRET: 'whsec_test_stripe', STRIPE_API_BASE: mocks.url,
   PAYPAL_CLIENT_ID: 'pp-client', PAYPAL_CLIENT_SECRET: 'pp-secret', PAYPAL_WEBHOOK_ID: 'WH-1', PAYPAL_API_BASE: mocks.url,
-  PAYMENTS_SIMULATOR: 'true', RESEND_API_KEY: 're_test_key', RESEND_API_BASE: mocks.url, ADMIN_NOTIFICATION_EMAIL: 'info@avantiprint.com.au',
+  PAYMENTS_SIMULATOR: 'true', RESEND_API_KEY: 're_test_key', RESEND_API_BASE: mocks.url, ADMIN_NOTIFICATION_EMAIL: 'info@avantiprint.com.au', SHIPPING_REQUIRE_APPROVAL: 'false',
   RESEND_WEBHOOK_SECRET: 'whsec_' + Buffer.from('resend-test-secret-32-bytes-long!!').toString('base64'),
   CRON_SECRET: 'cron-test-secret', BUSINESS_ABN: '12 345 678 901', BUSINESS_ADDRESS: '1 Test St, Smithfield NSW 2164',
 });
@@ -103,9 +103,14 @@ test('checkout recalculates prices on the server and ignores prices sent by the 
   assert.match(o.number, /^AVP-\d{4,}$/);
   assert.equal(o.row.status, 'pending_payment');
   assert.equal(o.row.subtotal_cents, 5 * 10800);             // 5+ tier
-  assert.equal(o.row.delivery_cents, 3000);
-  assert.equal(o.row.total_cents, 5 * 10800 + 3000);
-  assert.equal(o.row.gst_cents, Math.round((5 * 10800 + 3000) / 11));
+  // delivery comes from the shipping calculator, ex GST in whole dollars, plus GST
+  const ship = o.row.shipping_quote;
+  assert.equal(ship.ok, true); assert.equal(ship.zone.name, 'Sydney Metro'); assert.equal(ship.postcode, '2164');
+  assert.equal(o.row.shipping_ex_gst_cents % 100, 0); assert.equal(o.row.delivery_cents, o.row.shipping_ex_gst_cents + ship.gst_cents);
+  assert.equal(ship.gst_cents, o.row.shipping_ex_gst_cents / 10);
+  assert.equal(o.row.delivery_method, 'Standard Delivery'); assert.equal(o.row.shipping_config_version, ship.config_version);
+  assert.equal(o.row.total_cents, 5 * 10800 + o.row.delivery_cents);
+  assert.equal(o.row.gst_cents, Math.round(5 * 10800 / 11) + ship.gst_cents);
   assert.equal(o.row.email, 'jo.buyer@example.com');
   assert.match(o.redirect_url, /action=simulate/);
   const ev = await events(o.order_id);
@@ -121,12 +126,19 @@ test('checkout rejects bad input with a plain message', async () => {
   await bad({ lines: [] }, /empty/);
   await bad({ lines: [{ slug: 'custom-branded-mailer-boxes', qty: 1, opts: { Material: 'Unobtainium' } }] }, /choose all options|not available/);
   await bad({ lines: [{ slug: 'no-such-product', qty: 1 }] }, /no longer available/);
-  await bad({ delivery: {} }, /delivery option/);
+  await bad({ customer: { ...CUSTOMER, address: { ...CUSTOMER.address, state: 'WA', postcode: '6000' } } }, /Delivery pricing is currently unavailable for your postcode/);
 });
 
-test('items without a delivery rate are flagged for a quote', async () => {
-  const q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER] } });
-  assert.equal(q.status, 200, JSON.stringify(q.data)); assert.equal(q.data.quote_required, true); assert.equal(q.data.delivery.groups.length, 1);
+test('checkout quote: one Standard Delivery price for the postcode, never the working', async () => {
+  const lines = [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER];
+  let q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines } });
+  assert.equal(q.status, 200, JSON.stringify(q.data)); assert.equal(q.data.shipping.needs_postcode, true); assert.equal(q.data.delivery_cents, 0);
+  q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines, postcode: '2164' } });
+  assert.deepEqual(Object.keys(q.data.shipping).sort(), ['ex_gst_cents', 'gst_cents', 'inc_gst_cents', 'method', 'ok']);
+  assert.equal(q.data.shipping.method, 'Standard Delivery'); assert.equal(q.data.delivery_cents, q.data.shipping.inc_gst_cents);
+  q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines, postcode: '6000' } });
+  assert.deepEqual(q.data.shipping, { ok: false, method: 'Standard Delivery', message: 'Delivery pricing is currently unavailable for your postcode. Please contact us for a shipping quote.' });
+  assert.equal(q.data.delivery_cents, 0);
 });
 
 test('Stripe: session created with the right amounts, then paid only by a signed webhook', async () => {
@@ -137,7 +149,7 @@ test('Stripe: session created with the right amounts, then paid only by a signed
   assert.equal(s.params['line_items[0][price_data][unit_amount]'], '10800');
   assert.equal(s.params['line_items[0][quantity]'], '5');
   assert.equal(s.params['line_items[2][price_data][product_data][name]'], 'Delivery');
-  assert.equal(s.params['line_items[2][price_data][unit_amount]'], String(5000 + 2000));
+  assert.equal(s.params['line_items[2][price_data][unit_amount]'], String(o.row.delivery_cents));
   assert.equal(s.params.currency, 'aud'); assert.equal(s.idempotency, `checkout-${o.order_id}`);
   assert.match(s.params.success_url, new RegExp(`#/order/${o.order_id}\\?t=`));
   assert.equal(o.redirect_url, `https://checkout.stripe.test/c/pay/${s.id}`);
@@ -517,7 +529,7 @@ test('a paid order emails the customer the full details and alerts the Avanti te
   const o = await paidOrder();
   const [c] = customerMail();
   assert.match(c.subject, new RegExp(`Order confirmed: ${o.number}`));
-  for (const re of [/Pull Up Banner|Banner/, /\$108\.00 each/, /Subtotal/, /Delivery/, /Total/, /includes GST/i, /12 Print St/, /Smithfield/, /Metro NSW delivery/, /info@avantiprint\.com\.au/])
+  for (const re of [/Pull Up Banner|Banner/, /\$108\.00 each/, /Subtotal/, /Delivery/, /Total/, /includes GST/i, /12 Print St/, /Smithfield/, /Standard Delivery/, /info@avantiprint\.com\.au/])
     { assert.match(c.html, re, `html missing ${re}`); assert.match(c.text, re, `text missing ${re}`); }
   const [s] = staffMail();
   assert.match(s.subject, new RegExp(`New order ${o.number}: \\$[\\d,]+\\.\\d\\d from Jo Buyer`));
@@ -792,13 +804,11 @@ async function upload(name, bytes) {   // the customer's browser uploading artwo
   assert.equal(r.status, 200); return path;
 }
 
-test('items without a delivery rate cannot be paid with $0 delivery', async () => {
+test('a postcode without delivery pricing cannot be paid (never a cheaper or $0 rate)', async () => {
   await reset();
-  const q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER] } });
-  assert.equal(q.data.quote_required, true); assert.equal(q.data.quote_items.length, 1);
-  const r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER,
-    lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER], delivery: { 'pull-up-banners': 'Metro NSW delivery' } } });
-  assert.equal(r.status, 400); assert.match(r.data.error, /needs a quote before you can pay/); assert.match(r.data.error, /\(02\) 9729 0139/);
+  const r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe',
+    customer: { ...CUSTOMER, address: { ...CUSTOMER.address, suburb: 'Dubbo', postcode: '2830' } }, lines: [{ slug: 'wallpaper-sample', qty: 1, opts: {} }, LINE_BANNER] } });
+  assert.equal(r.status, 400); assert.equal(r.data.error, 'Delivery pricing is currently unavailable for your postcode. Please contact us for a shipping quote.');
   assert.equal((await d.select('orders', 'select=id')).length, 0);   // nothing created
   assert.equal(mocks.state.stripeSessions.length, 0);                 // and nothing sent to Stripe
 });

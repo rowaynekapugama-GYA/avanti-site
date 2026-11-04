@@ -3,6 +3,7 @@ import { config, db, handle, json, html, redirect, readJson, HttpError, escHtml 
 import { quote, createPendingOrder, loadOrder } from './_lib/orders.js';
 import { stripeCheckout, paypalCheckout, paypalCapture, stripeSign } from './_lib/payments.js';
 import { markPaid, receiveArtwork } from './_lib/effects.js';
+import { customerView } from './_lib/shipping/engine.js';
 import { receive } from './webhooks.js';
 
 const UPLOAD_OK = ['paid', 'in_production'];   // artwork can be added online until the order is dispatched
@@ -89,7 +90,9 @@ export const POST = handle(async (req) => {
     const body = await readJson(req);
     const q = await quote(db(cfg), body);
     return json({ lines: q.lines.map(l => ({ slug: l.product_slug, name: l.name, qty: l.qty, unit_cents: l.unit_cents, line_cents: l.line_cents })),
-      delivery: q.delivery, delivery_cents: q.deliveryCents, subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst, quote_required: q.quoteRequired, quote_items: q.quoteItems });
+      delivery_cents: q.deliveryCents, subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst,
+      // one method, the price only; never the internal working
+      shipping: q.shipping ? customerView(q.shipping) : { ok: false, method: 'Standard Delivery', needs_postcode: true } });
   }
 
   if (action === 'create') {

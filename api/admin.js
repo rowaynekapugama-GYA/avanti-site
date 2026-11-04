@@ -12,8 +12,20 @@ import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, s
 
 const STATUSES = ['paid', 'in_production', 'dispatched', 'delivered', 'cancelled', 'refunded'];
 
+// Signed-in admins see the actual reason when something fails (e.g. a database message), so a problem
+// can be fixed without digging through server logs. Customers never reach this endpoint.
 export const POST = handle(async (req) => {
-  const cfg = config(), admin = await requireAdmin(req, cfg), d = db(cfg);
+  const cfg = config(), admin = await requireAdmin(req, cfg);
+  try { return await adminAction(req, cfg, admin); }
+  catch (e) {
+    if (e instanceof HttpError) throw e;
+    console.error(e);
+    throw new HttpError(500, `Something went wrong: ${String(e && e.message || e).slice(0, 300)}`);
+  }
+});
+
+async function adminAction(req, cfg, admin) {
+  const d = db(cfg);
   const action = new URL(req.url).searchParams.get('action'), b = await readJson(req, 2_000_000), who = `admin:${admin.email}`;
   const need = (v, msg) => { if (!v) throw new HttpError(400, msg); return v; };
 
@@ -257,4 +269,4 @@ export const POST = handle(async (req) => {
     }
     default: throw new HttpError(404, 'Unknown action');
   }
-});
+}

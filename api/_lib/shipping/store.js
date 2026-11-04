@@ -4,7 +4,8 @@ import { validateConfig } from './validate.js';
 import { quoteShipping } from './engine.js';
 import { HttpError } from '../core.js';
 
-const missingTable = e => /shipping_config_versions|relation .* does not exist|PGRST205|42P01/i.test(String(e && (e.message || e.code)));
+// only "the table isn't there yet" counts as not set up; any other database error is reported, not hidden
+const missingTable = e => ['PGRST205', '42P01'].includes(e && e.code) || /(could not find the table|relation "?[\w.]*shipping_config_versions"? does not exist)/i.test(String(e && e.message));
 
 // The settings in use (highest version). The first time, the client spec's starting settings are
 // saved as version 1. If the database update hasn't been run, the starting settings are used

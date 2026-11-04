@@ -122,6 +122,7 @@ export async function requireAdmin(req, cfg = config()) {
   const auth = req.headers.get('authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) throw new HttpError(401, 'Please sign in again.');
+  if (!cfg.supabaseUrl || !cfg.serviceKey) throw new HttpError(503, 'This site\'s server isn\'t connected to the database: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY need to be set in Vercel for this environment.');
   const r = await fetch(`${cfg.supabaseUrl}/auth/v1/user`, { headers: { apikey: cfg.anonKey || cfg.serviceKey, Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new HttpError(401, 'Your session has expired. Please sign in again.');
   const user = await r.json();

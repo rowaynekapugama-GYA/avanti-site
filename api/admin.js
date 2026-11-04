@@ -3,7 +3,7 @@
 // order, sends email or touches consent comes through here so it is validated and audited.
 import { config, db, handle, json, readJson, requireAdmin, HttpError, audit } from './_lib/core.js';
 import { move, sendOrderEmail, sendStaffAlert, sendCustomerNote, sendArtworkRequest, orderEmailsOn, flag } from './_lib/effects.js';
-import { loadOrder, loadCatalogue } from './_lib/orders.js';
+import { loadOrder, loadCatalogue, shippingOptions } from './_lib/orders.js';
 import { loadShippingConfig, saveShippingConfig, shippingFor } from './_lib/shipping/store.js';
 import { quoteShipping, serialiseQuote, customerView, findZone } from './_lib/shipping/engine.js';
 import { validateConfig } from './_lib/shipping/validate.js';
@@ -92,7 +92,7 @@ export const POST = handle(async (req) => {
         if (l.spec) return { spec: l.spec, qty: l.qty, name: l.name };
         const p = cat.products[l.slug];
         if (!p) throw new HttpError(400, `Unknown product: ${l.slug}`);
-        return { slug: p.slug, category: p.category_slug, name: p.name, qty: l.qty, opts: l.opts || {} };
+        return { slug: p.slug, category: p.category_slug, name: p.name, qty: l.qty, opts: shippingOptions(p, l.opts || {}) };   // same option rules as checkout
       });
       if (!lines.length) throw new HttpError(400, 'Add at least one item.');
       const live = quoteShipping({ lines, postcode: b.postcode, config: use.config, version: use.version, requireApproval: true });

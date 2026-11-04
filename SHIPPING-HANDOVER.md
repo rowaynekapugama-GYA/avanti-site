@@ -13,8 +13,18 @@ releases both.
   is too big for ordinary courier rates, the customer sees exactly:
   "Delivery pricing is currently unavailable for your postcode. Please contact us for a shipping
   quote." (plus Avanti's phone and email) and can't pay online. It never falls back to a cheaper zone.
-- The server works out the price. Nothing the browser sends can change it. The same figure goes
-  to Stripe or PayPal and is saved on the order.
+- The server works out the price. Nothing the browser sends can change it: the calculator only
+  sees the product's own options with one of their listed choices, plus the wall or custom size
+  (checked against the product's maximum on the server). The same figure goes to Stripe or PayPal
+  and is saved on the order.
+- More than 50 packages in one order (editable) shows the "unavailable" message: that's a freight
+  job to quote by phone, and it keeps the calculation quick.
+- If the postcode isn't normally in the state the customer chose, the order still goes through
+  (some border towns use the neighbouring state's postcodes) but its timeline says "Check the
+  address" so staff can confirm before booking the courier.
+- Pay always uses the price for the postcode in the box. If the customer changes the postcode and
+  presses Pay before the new price shows, checkout stops, shows the new delivery and asks them
+  to press Pay again.
 - Each order stores a copy of the whole calculation and the settings version used. That copy
   can't be changed afterwards (database trigger).
 
@@ -25,7 +35,8 @@ dashboard simulator. All money is whole numbers (fractions of a cent kept exactl
 
 1. Each cart line is packed using its packing profile (rigid, flat, rolled, poster, wallpaper,
    fixed-size parcel, flat-pack). Packages over 20 kg, or over the profile's height/diameter
-   limit, are split.
+   limit, are split. Separate cart lines of the same thing share packages, just as one line
+   would (e.g. two lines of the same mailer, two cake toppers, two wallpaper walls).
 2. Each package gets a freight band from its longest packed side: Small ≤600 mm, Medium ≤1000,
    Large ≤1500, Oversized 1 ≤2000, Oversized 2 over 2000.
 3. The dearest package pays 100% of its zone base rate, the others 75% (editable; oversized
@@ -48,7 +59,7 @@ New:
 - `api/_lib/shipping/validate.js`: checks settings before they can be saved.
 - `api/_lib/shipping/store.js`: loads and saves settings versions.
 - `scripts/migrations/005-shipping-calculator.sql`: database changes (additive only).
-- `tests/shipping.test.mjs`: 17 engine tests (no database needed).
+- `tests/shipping.test.mjs`: 23 engine tests (no database needed).
 
 Changed:
 - `api/_lib/orders.js`: quote and order creation use the engine; orders store the calculation.
@@ -59,7 +70,7 @@ Changed:
 - `index.html`: checkout postcode pricing; cart and product pages say "calculated at checkout";
   new dashboard **Shipping** page (replaces the old per-category delivery options); Shipping card
   on each order.
-- `tests/api.test.mjs`: shipping tests (48 API tests in total).
+- `tests/api.test.mjs`: shipping tests (50 API tests in total).
 
 The old per-category delivery tables (`shipping_classes`, `shipping_rates`) are left in the
 database untouched but no longer used for pricing.
@@ -165,12 +176,43 @@ approved, every customer sees the "unavailable" message and nobody can pay onlin
   express. It needs rewording, e.g. "Delivery is priced from your postcode at checkout."
   Avanti should confirm the wording.
 
+## Independent review (4 November 2026)
+
+A separate reviewer went through the code against the spec before release. Its findings and
+what was done:
+
+| Finding | Done |
+|---|---|
+| Extra or made-up cart options could lower delivery (e.g. a fake "Custom size", or a word like "corflute" in a free-text field) | Fixed: only the product's own options and listed choices are used; custom sizes checked on the server |
+| A blank first band or width limit in the dashboard passed checks and priced everything as Small / 0% | Fixed: refused when saving, and the engine treats it as broken settings ("unavailable"), never as cheaper |
+| Two cart lines of the same mailer, wallpaper or cake topper went in separate packages | Fixed: they share packages |
+| Very large carts could tie up the server | Fixed: 50-package limit |
+| A blank per-zone package limit blocked the whole zone | Fixed: blank means "use the general limit" |
+| A $0 delivery was possible with zero rates in settings | Fixed: never quoted; warning in settings |
+| Pay pressed straight after changing the postcode | Fixed (above). Also fixed an older issue where the checkout page could be redrawn when fresh shop data arrived, leaving the Pay button answering for the old copy (a click that did nothing) |
+| Postcode not checked against state | Flagged on the order, not blocked (border towns) |
+| Rolls of different materials share a tube | Now a setting ("Different materials may share a roll"), on by default |
+| Percentages like 0.75 typed instead of 75 | Warning in settings |
+
+Left as they are, for Avanti to decide:
+- Once a zone is approved, later rate changes to it go live when saved, without approving again.
+  The person saving is recorded in History. If Avanti wants re-approval on every rate change,
+  that's a small change.
+- Package limits are set overall and per zone, not per band.
+- Override history records each change as "from → to", and profitability treats the latest
+  override as what was charged (staff refund or charge the difference in Stripe or PayPal).
+- Sydney Metro includes 1000-1920 (PO boxes), 2555-2574 (Camden/Macarthur) and 2740-2786 (to the
+  Blue Mountains). Canberra includes 2619-2620 (Queanbeyan, NSW). Because the narrowest range wins,
+  a metro range that's too wide prices those postcodes at metro rates, so these need checking.
+
 ## Tests
 
-- `node --test tests/shipping.test.mjs`: 17 engine tests (reference example, every band, width
-  and weight boundary, splitting, packing profiles, postcodes, availability, rounding, GST).
-- `tests/api.test.mjs`: 48 API tests against a local database (simulator equals checkout,
-  versioning, approvals, immutability, overrides, profitability, permissions).
+- `node --test tests/shipping.test.mjs`: 23 engine tests (reference example, every band, width
+  and weight boundary, splitting, packing profiles, postcodes, availability, rounding, GST,
+  broken settings, package limit, no $0 delivery).
+- `tests/api.test.mjs`: 50 API tests against a local database (simulator equals checkout,
+  versioning, approvals, immutability, overrides, profitability, permissions, extra or made-up
+  options can't lower delivery, custom size limits, postcode/state flag).
 - Browser checks on a local copy: checkout by postcode, approving a zone, simulator, validation,
   history, order card, profitability, phone layout; plus the existing order, artwork, demo and
   site-wide checks.

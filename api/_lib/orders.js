@@ -3,6 +3,7 @@
 import { HttpError, cents, audit, config } from './core.js';
 import { loadShippingConfig, shippingFor } from './shipping/store.js';
 import { UNAVAILABLE, METHOD, serialiseQuote } from './shipping/engine.js';
+import { STATE_RANGES } from './shipping/validate.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -10,15 +11,17 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 // ---- catalogue ----
 export async function loadCatalogue(d, slugs) {
   const list = [...new Set(slugs)].map(s => `"${String(s).replace(/"/g, '')}"`).join(',');
-  const [products, variations, tiers, cats, classes, rates] = await Promise.all([
-    d.select('products', `select=slug,name,category_slug,pricing_mode,base_price,wall_dims,variation_keys,sold_out,published&slug=in.(${list})`),
+  const [products, variations, tiers, cats, classes, rates, options] = await Promise.all([
+    d.select('products', `select=slug,name,category_slug,pricing_mode,base_price,wall_dims,dims_config,variation_keys,sold_out,published&slug=in.(${list})`),
     d.select('product_variations', `select=product_slug,option_values,price,available&product_slug=in.(${list})`),
     d.select('product_price_tiers', `select=product_slug,min_qty,unit_price&product_slug=in.(${list})&order=min_qty`),
     d.select('categories', 'select=slug,name,shipping_class'),
     d.select('shipping_classes', 'select=slug,label,courier,note,position&order=position'),
     d.select('shipping_rates', 'select=class_slug,label,amount,position&order=position'),
+    d.select('product_options', `select=product_slug,name,choices&product_slug=in.(${list})`),
   ]);
-  const bySlug = Object.fromEntries(products.map(p => [p.slug, { ...p, variations: [], tiers: [] }]));
+  const bySlug = Object.fromEntries(products.map(p => [p.slug, { ...p, variations: [], tiers: [], choices: {} }]));
+  options.forEach(o => { if (bySlug[o.product_slug]) bySlug[o.product_slug].choices[o.name] = (o.choices || []).map(String); });
   variations.forEach(v => bySlug[v.product_slug] && bySlug[v.product_slug].variations.push(v));
   tiers.forEach(t => bySlug[t.product_slug] && bySlug[t.product_slug].tiers.push(t));
   return {
@@ -26,6 +29,32 @@ export async function loadCatalogue(d, slugs) {
     categories: Object.fromEntries(cats.map(c => [c.slug, c])),
     classes: classes.map(c => ({ ...c, rates: rates.filter(r => r.class_slug === c.slug) })),
   };
+}
+
+// "1200 × 2400 mm" (also x, X or *, decimals allowed) -> [1200, 2400]; anything else -> null
+export function parseWH(text) {
+  const m = String(text || '').trim().match(/^(\d{1,6}(?:\.\d+)?)\s*(?:mm)?\s*[×xX*]\s*(\d{1,6}(?:\.\d+)?)\s*(?:mm)?$/);
+  if (!m) return null;
+  const w = Number(m[1]), h = Number(m[2]);
+  return w > 0 && h > 0 && w <= 100000 && h <= 100000 ? [w, h] : null;
+}
+// The options the shipping calculator may look at: only this product's own options with one of their listed
+// choices (or a priced variation), plus the wall or custom size for products that take one, in whole millimetres.
+// Anything else the browser adds (free text, made-up option names) can't change the delivery price.
+export function shippingOptions(p, opts) {
+  const out = {};
+  for (const [name, choices] of Object.entries(p.choices || {})) if (opts[name] != null && choices.includes(String(opts[name]))) out[name] = String(opts[name]);
+  for (const k of p.variation_keys || []) if (opts[k] != null && p.variations.length) out[k] = String(opts[k]);   // already matched to a variation by unitCents
+  if (p.wall_dims) { const wh = parseWH(opts.Wall); if (wh) out.Wall = `${Math.ceil(wh[0])} × ${Math.ceil(wh[1])} mm`; }
+  if (p.pricing_mode === 'custom_dims') { const wh = parseWH(opts['Custom size']); if (wh) out['Custom size'] = `${Math.ceil(wh[0])} × ${Math.ceil(wh[1])} mm`; }
+  return out;
+}
+// Custom-size products: the size must be there and within the product's maximum (also checked in the browser)
+function checkCustomSize(p, opts) {
+  if (p.pricing_mode !== 'custom_dims') return;
+  const wh = parseWH(opts['Custom size']), mx = p.dims_config || {};
+  if (!wh) throw new HttpError(400, `Please enter the width and height in millimetres for ${p.name}.`);
+  if ((mx.maxW && wh[0] > mx.maxW) || (mx.maxH && wh[1] > mx.maxH)) throw new HttpError(400, `The maximum size for ${p.name} is ${mx.maxW} × ${mx.maxH} mm.`);
 }
 
 // Same rules as unitPrice() in the storefront (checked by the parity test for every combination).
@@ -38,9 +67,9 @@ export function unitCents(p, qty, opts = {}) {
     return cents(v.price);
   }
   if (p.wall_dims) {
-    const m = String(opts.Wall || '').match(/(\d+)\D+(\d+)/);
+    const m = parseWH(opts.Wall);
     if (!m) throw new HttpError(400, `Please enter your wall size for ${p.name}.`);
-    const m2 = Math.max(0.5, (+m[1] * +m[2]) / 1e6);
+    const m2 = Math.max(0.5, (m[0] * m[1]) / 1e6);
     return cents(Math.round(m2 * p.base_price * 100) / 100);
   }
   if (p.tiers.length) { let u = p.tiers[0].unit_price; p.tiers.forEach(t => { if (qty >= t.min_qty) u = t.unit_price; }); return cents(u); }
@@ -93,6 +122,7 @@ export async function quote(d, body) {
     if (!(qty >= 1 && qty <= 100000)) throw new HttpError(400, `Please check the quantity for ${p.name}.`);
     const opts = Object.fromEntries(Object.entries(l.opts || {}).slice(0, 40).map(([k, v]) => [String(k).slice(0, 80), String(v).slice(0, 500)]));
     const unit = unitCents(p, qty, opts);
+    checkCustomSize(p, opts);
     const art = l.art || null;
     const artwork = art ? {
       later: !!art.later, design: art.design ? String(art.design).slice(0, 200) : null,
@@ -102,7 +132,7 @@ export async function quote(d, body) {
         copy: !!f.copy || f.name === 'Same as front' })),   // "copy": one artwork printed on both sides, nothing to upload
     } : null;
     return { position: i, product_slug: p.slug, name: p.name, category_slug: p.category_slug, options: opts, qty,
-      unit_cents: unit, line_cents: unit * qty, artwork };
+      unit_cents: unit, line_cents: unit * qty, artwork, ship_opts: shippingOptions(p, opts) };
   });
   // Delivery: one "Standard Delivery" price from the shipping calculator, for the customer's postcode.
   // Product prices include GST; the delivery price is worked out ex GST and GST is added to it.
@@ -110,8 +140,9 @@ export async function quote(d, body) {
   let shipping = null;
   if (String(postcode).trim()) {
     const loaded = await loadShippingConfig(d);
-    shipping = shippingFor(lines.map(l => ({ slug: l.product_slug, category: l.category_slug, name: l.name, qty: l.qty, opts: l.options })), postcode, loaded, config());
+    shipping = shippingFor(lines.map(l => ({ slug: l.product_slug, category: l.category_slug, name: l.name, qty: l.qty, opts: l.ship_opts })), postcode, loaded, config());
   }
+  lines.forEach(l => { delete l.ship_opts; });
   const deliveryCents = shipping && shipping.ok ? shipping.inc_gst_cents : 0;
   const subtotal = lines.reduce((s, l) => s + l.line_cents, 0), total = subtotal + deliveryCents;
   return { lines, shipping, deliveryCents, deliveryMethod: shipping && shipping.ok ? METHOD : null, subtotal, total,
@@ -139,12 +170,18 @@ export async function createPendingOrder(d, body) {
     shipping_postcode: q.shipping.postcode, shipping_zone: q.shipping.zone && q.shipping.zone.name, shipping_ex_gst_cents: q.shipping.ex_gst_cents };
   let order, saved = true;
   try { [order] = await d.insert('orders', { ...row, ...ship }); }
-  catch (e) {   // database update 005 not run yet: take the order anyway, and say so on its timeline
-    if (!/shipping_/.test(String(e.message))) throw e;
+  catch (e) {   // database update 005 not run yet (the columns don't exist): take the order anyway, and say so on its timeline
+    const msg = String(e.message);
+    if (!(/shipping_/.test(msg) && /(does not exist|could not find|schema cache)/i.test(msg))) throw e;
     [order] = await d.insert('orders', row); saved = false;
   }
   if (!saved) await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'system',
     note: `Shipping calculation not saved (run database update 005): ${q.shipping.zone && q.shipping.zone.name}, settings version ${q.shipping.config_version}, ${q.shipping.packages.length} package(s), $${(q.shipping.ex_gst_cents / 100).toFixed(2)} ex GST.` });
+  // delivery is priced by postcode; flag it for staff if the postcode isn't normally in the chosen state
+  // (not blocked: some border towns use the neighbouring state's postcodes)
+  const pcN = Number(cust.address.postcode), inState = (STATE_RANGES[cust.address.state] || []).some(([a, b]) => pcN >= a && pcN <= b);
+  if (!inState) await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'system',
+    note: `Check the address: postcode ${cust.address.postcode} isn't normally in ${cust.address.state}. Delivery was priced for ${cust.address.postcode} (${q.shipping.zone && q.shipping.zone.name}).` });
   await d.insert('order_items', q.lines.map(l => ({ ...l, order_id: order.id })));
   await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'customer',
     note: `Checkout started with ${body.provider}`, data: { total_cents: q.total } });

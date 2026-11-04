@@ -197,3 +197,58 @@ test('every product in the shop resolves to a packing profile', async () => {
 test('the seed settings pass validation', () => {
   assert.deepEqual(validateConfig(SEED).errors, []);
 });
+
+// ---- from the independent review (4 Nov 2026)
+test('a blank first band or width limit is refused, and never prices everything as Small', () => {
+  const noBand = cfg(c => { c.bands[0].up_to_mm = null; });
+  assert.ok(validateConfig(noBand).errors.some(e => /band limits/.test(e)));
+  assert.throws(() => bandFor(2400, noBand), /bad_settings/);
+  assert.equal(quote([{ slug: 'acm-panels', category: 'acm-panels', name: 'ACM', qty: 1, opts: { Size: '1200mm x 2400mm' } }], '2164', noBand).ok, false);
+  const noWidth = cfg(c => { c.zones[0].width_tiers[0].up_to_mm = null; });
+  assert.ok(validateConfig(noWidth).errors.some(e => /width surcharge limits/.test(e)));
+  const r = quote([FOAM(1, '1200mm x 900mm')], '2164', noWidth);
+  assert.equal(r.ok, false); assert.equal(r.reason, 'bad_settings');
+});
+
+test('a blank per-zone package limit falls back to the general limit', () => {
+  const c = cfg(x => { x.zones[0].feasibility = { max_length_mm: null, max_width_mm: null, max_height_mm: null, max_weight_g: null }; });
+  assert.deepEqual(validateConfig(c).errors, []);
+  assert.equal(quote([FOAM(1)], '2164', c).ok, true);
+  const tight = cfg(x => { x.zones[0].feasibility = { max_length_mm: 500 }; });
+  assert.equal(quote([FOAM(1)], '2164', tight).reason, 'package_not_feasible');   // 620 mm packed
+  assert.ok(validateConfig(cfg(x => { x.zones[0].feasibility = { max_length_mm: -1 }; })).errors.length);
+});
+
+test('separate cart lines of the same thing share packages, as one line would', () => {
+  const mailer = qty => ({ slug: 'custom-branded-mailer-boxes', category: 'mailer-boxes', name: 'Mailer', qty, opts: { Material: 'White E Flute 1.5mm', 'Size (mm)': '225 × 160 × 80' } });
+  const one = quote([mailer(200)]), two = quote([mailer(100), mailer(100)]);
+  assert.equal(two.packages.length, one.packages.length); assert.equal(two.ex_gst_cents, one.ex_gst_cents);
+  const wall = { slug: 'wallpaper', category: 'wallpaper', name: 'Wallpaper', qty: 1, opts: { Wall: '2000 × 2400 mm' } };
+  const w1 = quote([{ ...wall, qty: 2 }]), w2 = quote([wall, wall]);
+  assert.equal(w2.packages.length, w1.packages.length); assert.equal(w2.ex_gst_cents, w1.ex_gst_cents);
+  const topper = slug => ({ slug, category: 'cake-toppers', name: slug, qty: 2, opts: {} });
+  const t = quote([topper('name-and-age-cake-topper'), topper('custom-text-cake-topper')]);
+  assert.equal(t.packages.length, 1); assert.equal(t.packages[0].contents.length, 2);   // 4 toppers, 5 per mailer
+});
+
+test('more packages than the limit is unavailable, and stays quick', () => {
+  const t0 = Date.now();
+  const r = quote(Array.from({ length: 100 }, () => FOAM(100000, '100mm x 100mm', 'Foamboard 10mm')));
+  assert.equal(r.ok, false); assert.equal(r.reason, 'too_many_packages'); assert.ok(!('ex_gst_cents' in r));
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+  assert.equal(quote([FOAM(10)]).ok, true);
+});
+
+test('a $0 delivery is never quoted', () => {
+  const free = cfg(c => { c.pricing.minimum_ex_gst_cents = 0; for (const k of Object.keys(c.zones[0].rates)) c.zones[0].rates[k] = 0;
+    c.zones[0].weight_tiers.forEach(t => { t.cents = 0; }); Object.assign(c.packaging, { cardboard_cents_m2: 0, bubble_cents_m2: 0, labour_cents: 0, tape_cents: 0 }); });
+  assert.ok(validateConfig(free).warnings.some(w => /\$0/.test(w)));
+  const r = quote([FOAM(1)], '2164', free); assert.equal(r.ok, false); assert.equal(r.reason, 'zero_price');
+});
+
+test('rolls of different materials can be kept apart', () => {
+  const item = (mat, l) => ({ spec: { profile: 'rolled', material: mat, length_mm: l, width_mm: 600 }, qty: 1, name: mat });
+  const lines = [item('floor_decal', 1000), item('poster_paper', 1000)];
+  assert.equal(quote(lines).packages.length, 1);
+  assert.equal(quote(lines, '2164', cfg(c => { c.profiles.rolled.mix_materials = false; })).packages.length, 2);
+});

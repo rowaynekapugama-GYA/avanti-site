@@ -2141,7 +2141,9 @@ const GYA = (() => {
   }
   async function boot() {
     if (!enabled || !adapter) return;
-    document.addEventListener('change', e => { if (e.target.closest && e.target.closest('#main') && !e.target.closest('.gya-admin')) state.touched = true; }, true);
+    // once someone has typed or chosen anything on the page, fresh data must not redraw it under them
+    const touch = e => { if (e.target.closest && e.target.closest('#main') && !e.target.closest('.gya-admin')) state.touched = true; };
+    document.addEventListener('change', touch, true); document.addEventListener('input', touch, true);
     try {
       const rows = await fetchPublic(), sig = hash(JSON.stringify(rows));
       const c = ls.get(KEY.cache);
@@ -3282,7 +3284,7 @@ const GYA = (() => {
         <p class="gya-muted gya-small">Sequence: base freight (dearest package 100%, others at the additional rate) × freight markup, plus every package's width and weight surcharges, plus packaging cost × packaging markup; then the minimum, then rounding; GST added on top. Surcharges and packaging are never discounted.</p></section>
       <section class="gya-card"><h3>Freight bands (longest packed side)</h3><div class="gya-grid3">${(SH.draft.bands || []).slice(0, 4).map((b, i) => shFld(`${b.label} up to (mm)`, `bands.${i}.up_to_mm`, 'int')).join('')}<div class="gya-field"><span>${esc((SH.draft.bands || [])[4] ? SH.draft.bands[4].label : 'Oversized 2')}</span><p class="gya-muted gya-small">Everything longer</p></div></div></section>
       <section class="gya-card"><h3>Package limits (carrier feasibility)</h3><p class="gya-muted gya-small">A package over any of these is not priced: the customer sees the "unavailable" message instead of an ordinary parcel rate.</p>
-        <div class="gya-grid3">${shFld('Max length (mm)', 'feasibility.max_length_mm', 'int')}${shFld('Max width (mm)', 'feasibility.max_width_mm', 'int')}${shFld('Max height (mm)', 'feasibility.max_height_mm', 'int')}${shFld('Max weight (kg)', 'feasibility.max_weight_g', 'kg')}</div></section>
+        <div class="gya-grid3">${shFld('Max length (mm)', 'feasibility.max_length_mm', 'int')}${shFld('Max width (mm)', 'feasibility.max_width_mm', 'int')}${shFld('Max height (mm)', 'feasibility.max_height_mm', 'int')}${shFld('Max weight (kg)', 'feasibility.max_weight_g', 'kg')}${shFld('Most packages per order', 'feasibility.max_packages', 'int', 'More than this shows "unavailable" (a freight job, quoted by phone)')}</div></section>
       <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Base rates by zone, ex GST</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Zone</th>${['small', 'medium', 'large', 'os1', 'os2'].map(k => `<th>${BAND_LABEL[k]}</th>`).join('')}</tr></thead><tbody>
         ${zones.map((z, i) => `<tr><td>${esc(z.name)} ${z.enabled ? '' : '<span class="gya-muted gya-small">(disabled)</span>'}</td>${['small', 'medium', 'large', 'os1', 'os2'].map(k => `<td>${shIn(`zones.${i}.rates.${k}`, 'money')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <p class="gya-muted gya-small" style="padding:0 18px 14px">Width and weight surcharges are set per zone on the Zones tab. Never copy one zone's rates into another unless they have been checked for that destination.</p></section>`;
@@ -3309,7 +3311,7 @@ const GYA = (() => {
       ${prof('flat', 'Flat prints (A4/A3) packing', [['Edge allowance (mm)', 'edge_allowance_mm', 'int'], ['Height allowance (mm)', 'height_allowance_mm', 'int'], ['Minimum height (mm)', 'min_height_mm', 'int'], ['Maximum height (mm)', 'max_height_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg'],
         ['Stacking different sizes', 'stacking', 'select', [['same_size', 'Same size only'], ['fit_within', 'Smaller on larger']]], ['Cardboard', 'cardboard', 'select', packOpts], ['Bubble wrap', 'bubble', 'select', packOpts]])}
       ${prof('rolled', 'Rolled prints packing', [['Core diameter (mm)', 'core_mm', 'int'], ['Max printed width (mm)', 'max_printed_width_mm', 'int'], ['Max packed roll width (mm)', 'max_packed_width_mm', 'int'], ['Max finished diameter (mm)', 'max_diameter_mm', 'int'],
-        ['End allowance (mm)', 'end_allowance_mm', 'int'], ['Diameter allowance (mm)', 'diameter_allowance_mm', 'int'], ['Core weight (kg per metre)', 'core_g_per_m', 'kg'], ['Maximum weight (kg)', 'max_weight_g', 'kg'], ['Different widths may share a roll', 'mix_widths', 'bool']])}
+        ['End allowance (mm)', 'end_allowance_mm', 'int'], ['Diameter allowance (mm)', 'diameter_allowance_mm', 'int'], ['Core weight (kg per metre)', 'core_g_per_m', 'kg'], ['Maximum weight (kg)', 'max_weight_g', 'kg'], ['Different widths may share a roll', 'mix_widths', 'bool'], ['Different materials may share a roll', 'mix_materials', 'bool']])}
       ${prof('wallpaper', 'Wallpaper packing', [['Area per roll (m²)', 'roll_area_m2', 'num'], ['Rolls per carton', 'rolls_per_carton', 'int'], ['Waste allowance (%)', 'waste_bps', 'pct'], ['Carton length (mm)', 'carton.length_mm', 'int'], ['Carton width (mm)', 'carton.width_mm', 'int'], ['Carton height (mm)', 'carton.height_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg']])}
       ${prof('flatpack', 'Flat-pack boxes packing', [['Edge allowance (mm)', 'edge_allowance_mm', 'int'], ['Protection allowance (mm)', 'protection_mm', 'int'], ['Maximum stack height (mm)', 'max_stack_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg']])}
       <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Fixed-size parcels (A-frames, banners, cake toppers, samples)</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Parcel</th><th>L (mm)</th><th>W (mm)</th><th>H (mm)</th><th>Weight per unit (kg)</th><th>Units per package</th><th></th></tr></thead><tbody>
@@ -4903,6 +4905,9 @@ function pageCheckout(params){
 
 async function wireCheckout(params){
   if(!cart.lines.length) return;
+  // the page can be drawn again (e.g. when fresh shop data arrives); an older copy of this code must then stop,
+  // or it would answer for the new form with out-of-date delivery details
+  const form0=$('#coForm'), live=()=>!!(form0&&form0.isConnected);
   const $n=$('#coNotice'), note=(msg,bad)=>{ $n.innerHTML=`<div class="co-note${bad?' bad':''}">${msg}</div>`; $n.scrollIntoView({behavior:'smooth',block:'center'}); };
   const offline = () => { $('#coDelivery').innerHTML=''; $('#coPay').innerHTML='';
     note(`Online payment isn't available just yet. Please call us on <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email your order</a> and we'll look after it.`, true); };
@@ -4926,16 +4931,22 @@ async function wireCheckout(params){
     : ship.ok ? `<fieldset class="co-radios"><label><input type="radio" name="delivery" value="standard" checked><span>Standard Delivery</span><b>${cents$(ship.inc_gst_cents)}</b></label></fieldset><p class="co-muted co-small">${cents$(ship.ex_gst_cents)} + GST ${cents$(ship.gst_cents)}. We'll email you tracking when it's on its way.</p>`
     : `<p class="co-note co-warn" id="coShipMsg">${esc(ship.message||'Delivery pricing is currently unavailable for your postcode. Please contact us for a shipping quote.')} Call <a href="tel:0297290139">(02) 9729 0139</a> or <a href="mailto:info@avantiprint.com.au">email us</a>.</p>`;
   const canPay=()=>!!(ship&&ship.ok&&!mustFix);
-  const refreshShip=async()=>{ const pc=$('#coPostcode').value.trim();
-    if(!/^\d{4}$/.test(pc)){ ship=null; shipFor=''; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=true; return; }
-    if(pc===shipFor && ship && !ship.loading) return;
-    shipFor=pc; ship={loading:true}; $('#coDelivery').innerHTML=shipHtml(); $('#coSubmit').disabled=true;
-    try{ const r=await apiCall('/checkout?action=quote', {lines:cartForServer(), postcode:pc}); if(pc!==shipFor) return; q=r; ship=r.shipping; }
-    catch(e){ if(pc!==shipFor) return; ship={ok:false, message:e.message}; }
-    $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=!canPay(); };
-  try{ cfg = await apiCall('/checkout?action=config'); }catch(e){ offline(); return; }
+  // Returns a promise for the price of the postcode now in the box. While it's being worked out, Pay stays clickable
+  // (a click that blurs the postcode box would otherwise be lost) and the submit handler waits for it.
+  let shipP=Promise.resolve(), shownFor='';
+  const refreshShip=()=>{ const pc=$('#coPostcode').value.trim();
+    if(!/^\d{4}$/.test(pc)){ ship=null; shipFor=''; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=true; return Promise.resolve(); }
+    if(pc===shipFor && ship) return ship.loading ? shipP : Promise.resolve();
+    shipFor=pc; ship={loading:true}; $('#coDelivery').innerHTML=shipHtml(); $('#coSubmit').disabled=!!mustFix;
+    return shipP=(async()=>{
+      try{ const r=await apiCall('/checkout?action=quote', {lines:cartForServer(), postcode:pc}); if(!live()||pc!==shipFor) return; q=r; ship=r.shipping; }
+      catch(e){ if(!live()||pc!==shipFor) return; ship={ok:false, message:e.message}; }
+      shownFor=pc; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=!canPay(); })(); };
+  try{ cfg = await apiCall('/checkout?action=config'); }catch(e){ if(live()) offline(); return; }
+  if(!live()) return;
   if(!cfg.providers || !cfg.providers.length){ offline(); return; }
-  try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
+  try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ if(!live()) return; $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
+  if(!live()) return;
   q.lines.forEach((l,i)=>{ const el=$$('#coLines .co-price')[i]; if(el) el.textContent=cents$(l.line_cents); });
   $('#coDelivery').innerHTML=shipHtml(); totals();
   let shipT; $('#coPostcode').addEventListener('input',()=>{ clearTimeout(shipT); shipT=setTimeout(refreshShip, 350); });
@@ -4943,7 +4954,10 @@ async function wireCheckout(params){
   $('#coPay').innerHTML = `<fieldset class="co-radios">${cfg.providers.map((p,i)=>`<label><input type="radio" name="provider" value="${p.id}" ${i===0?'checked':''}><span>${esc(p.label)}</span>${p.test?'<b class="co-test">TEST MODE</b>':''}</label>`).join('')}</fieldset>`;
   $('#coSubmit').disabled = true; refreshShip();   // Pay only once there's a delivery price and no missing artwork
   $('#coForm').onsubmit=async e=>{ e.preventDefault();
-    if(!canPay()) return;
+    const seen=shownFor;
+    await refreshShip();   // the price must be for the postcode in the box right now
+    if(!canPay()){ if(ship&&ship.ok===false) $('#coDelivery').scrollIntoView({block:'center'}); return; }
+    if(seen!==shownFor){ note('Delivery has been updated for your new postcode. Please check the total, then press Pay again.'); $('#coTotals').scrollIntoView({block:'center'}); return; }
     const f=$('#coForm'), bad=[...f.querySelectorAll('[required]')].find(x=>!x.value.trim()) || (!/^\d{4}$/.test($('#coPostcode').value.trim())?$('#coPostcode'):null) || (!$('#coEmail').checkValidity()?$('#coEmail'):null);
     if(bad){ bad.focus(); note(`Please check ${esc((bad.labels[0]||{}).textContent||'this field').replace(/optional/,'').trim().toLowerCase()}.`, true); return; }
     const btn=$('#coSubmit'); btn.disabled=true; btn.textContent='Preparing secure payment…';

@@ -1051,3 +1051,42 @@ test('shipping: manual override keeps the original; courier costs feed profitabi
   assert.equal(p.data.totals.margin_cents, 1000);
   assert.equal((await act(editorToken, 'shipping-override', { order_id: o.order_id, new_ex_gst_cents: 1, reason: 'x' })).status, 403);
 });
+
+// from the independent review (4 Nov 2026): what the browser adds can't lower delivery
+test('shipping: extra or made-up options cannot change the delivery price', async () => {
+  await reset(); await shipStart();
+  const price = async lines => (await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines, postcode: '2164' } })).data;
+  const acm = { slug: 'acm-panels', qty: 3, opts: { Material: 'Aluminium Composite Panel with polymeric print and gloss/matte laminate', Size: '600mm x 800mm', Printing: 'Single Side', Laminate: 'Matte' } };
+  const pvc = { slug: 'foam-pvc', qty: 10, opts: { Thickness: 'PVC 5mm', Size: '600mm x 800mm', Printing: 'Single Side' } };
+  for (const [line, extra] of [[acm, { 'Custom size': '100 x 100 mm' }], [pvc, { Note: 'corflute 3mm' }], [pvc, { Design: 'Corflute 3mm' }], [pvc, { Size2: '10mm x 10mm' }]]) {
+    const plain = await price([line]), tricked = await price([{ ...line, opts: { ...line.opts, ...extra } }]);
+    assert.ok(plain.shipping.ok); assert.equal(tricked.shipping.inc_gst_cents, plain.shipping.inc_gst_cents, JSON.stringify(extra));
+  }
+  // a choice that isn't one of the product's own choices is ignored too
+  const odd = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [{ ...pvc, opts: { ...pvc.opts, Printing: 'Corflute 3mm' } }], postcode: '2164' } });
+  assert.equal(odd.status, 400);   // not a real combination, so it can't be priced at all
+  // custom sizes are checked on the server
+  const cf = opts => ({ slug: 'corflute-signs-custom-dimensions', qty: 1, opts: { Material: 'Corflute Signs 3mm', Printing: 'Single Side', Eyelets: 'No eyelets', ...opts } });
+  let r = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [cf({ 'Custom size': '1300 × 2400 mm' })], postcode: '2164' } });
+  assert.equal(r.status, 400); assert.match(r.data.error, /maximum size/);
+  r = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [cf({ 'Custom size': '1.2m x 2.4m' })], postcode: '2164' } });
+  assert.equal(r.status, 400);
+  r = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [cf({ 'Custom size': '1200 × 2400 mm' })], postcode: '2164' } });
+  assert.equal(r.status, 200); assert.equal(r.data.shipping.zone, undefined);
+  assert.ok(r.data.shipping.ok && r.data.shipping.ex_gst_cents > 15000, JSON.stringify(r.data.shipping));   // 1220 x 2420 mm packed: Oversized 2 with a 50% width surcharge, not the minimum
+  // huge carts: unavailable, quickly
+  const t0 = Date.now();
+  r = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: Array.from({ length: 100 }, () => ({ ...pvc, qty: 100000 })), postcode: '2164' } });
+  assert.equal(r.status, 200); assert.equal(r.data.shipping.ok, false); assert.ok(Date.now() - t0 < 5000);
+});
+
+test('shipping: a postcode outside the chosen state is flagged on the order for staff', async () => {
+  await reset(); await shipStart();
+  const syd = (await act(adminToken, 'shipping-get', {})).data;
+  const conf = syd.config; conf.zones.find(z => z.id === 'syd-metro').approval = { status: 'approved' };
+  await act(adminToken, 'shipping-save', { config: conf, expect_version: syd.version });
+  const o = await newOrder('stripe', { customer: { ...CUSTOMER, address: { ...CUSTOMER.address, state: 'WA' } } });
+  assert.ok((await events(o.order_id)).some(e => /isn't normally in WA/.test(e.note || '')));
+  const ok = await newOrder('stripe');
+  assert.ok(!(await events(ok.order_id)).some(e => /isn't normally in/.test(e.note || '')));
+});

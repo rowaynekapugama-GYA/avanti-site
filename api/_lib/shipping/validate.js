@@ -19,14 +19,19 @@ export function validateConfig(c) {
   for (const k of ['freight_markup_bps', 'packaging_markup_bps', 'additional_package_bps', 'minimum_ex_gst_cents', 'gst_bps'])
     if (!int(p[k]) || p[k] < 0) err(`Pricing: ${k.replace(/_/g, ' ')} must be a whole number of 0 or more.`);
   if (p.additional_package_bps > 10000) err('Pricing: the additional-package percentage cannot be more than 100%.');
+  if (int(p.additional_package_bps) && p.additional_package_bps < 1000) warn(`Pricing: additional packages pay only ${p.additional_package_bps / 100}% of their rate. Check this isn't meant to be ${p.additional_package_bps}%.`);
+  for (const k of ['freight_markup_bps', 'packaging_markup_bps']) if (int(p[k]) && p[k] > 0 && p[k] < 100) warn(`Pricing: ${k.replace(/_bps$/, '').replace(/_/g, ' ')} is only ${p[k] / 100}%. Check this isn't meant to be ${p[k]}%.`);
+  if (int(p.minimum_ex_gst_cents) && p.minimum_ex_gst_cents === 0) warn('Pricing: there is no minimum delivery charge, so delivery could be $0.');
   if (!['ceil_dollar', 'none'].includes(p.rounding)) err('Pricing: rounding must be "round up to the next dollar" or "none".');
 
   const bands = c.bands || [];
   if (bands.length !== 5 || bands[4].up_to_mm != null) err('There must be five freight bands, the last with no upper limit.');
-  for (let i = 1; i < 4; i++) if (!(bands[i] && bands[i - 1] && bands[i].up_to_mm > bands[i - 1].up_to_mm)) err('Freight band limits must go up in order.');
+  // every limit but the last must be a whole number of mm above 0, going up in order (a blank limit would price everything as Small)
+  for (let i = 0; i < 4; i++) if (!(bands[i] && int(bands[i].up_to_mm) && bands[i].up_to_mm > (i ? bands[i - 1].up_to_mm : 0))) { err('Freight band limits must be whole millimetres above 0, going up in order.'); break; }
 
   const f = c.feasibility || {};
   for (const k of ['max_length_mm', 'max_width_mm', 'max_height_mm', 'max_weight_g']) if (!(f[k] > 0)) err(`Package limits: ${k.replace(/_/g, ' ')} must be more than 0.`);
+  if (f.max_packages != null && !(int(f.max_packages) && f.max_packages > 0 && f.max_packages <= 200)) err('Package limits: the most packages per order must be a whole number from 1 to 200.');
 
   const ids = new Set();
   const ranges = [];   // [a, b, zoneIndex]
@@ -48,9 +53,14 @@ export function validateConfig(c) {
     const wt = z.width_tiers || [], gt = z.weight_tiers || [];
     if (!wt.length || wt[wt.length - 1].up_to_mm != null) err(`${label}: width surcharges must end with an "over" tier.`);
     for (const t of wt) if (!int(t.bps) || t.bps < 0) err(`${label}: width surcharge percentages must be whole numbers.`);
-    for (let k = 1; k < wt.length - 1; k++) if (!(wt[k].up_to_mm > wt[k - 1].up_to_mm)) err(`${label}: width surcharge limits must go up in order.`);
+    for (let k = 0; k < wt.length - 1; k++) if (!(int(wt[k].up_to_mm) && wt[k].up_to_mm > (k ? wt[k - 1].up_to_mm : 0))) { err(`${label}: width surcharge limits must be whole millimetres above 0, going up in order.`); break; }
     for (const t of gt) if (!int(t.cents) || t.cents < 0 || !(t.up_to_g > 0)) err(`${label}: weight surcharges need a weight limit and a whole-cent amount.`);
+    if (!gt.length) err(`${label}: needs at least one weight surcharge tier.`);
     for (let k = 1; k < gt.length; k++) if (!(gt[k].up_to_g > gt[k - 1].up_to_g)) err(`${label}: weight surcharge limits must go up in order.`);
+    if (z.feasibility != null) {
+      if (typeof z.feasibility !== 'object') err(`${label}: package limits are not valid.`);
+      else for (const [k, v] of Object.entries(z.feasibility)) if (['max_length_mm', 'max_width_mm', 'max_height_mm', 'max_weight_g'].includes(k) && v != null && !(int(v) && v > 0)) err(`${label}: package limit ${k.replace(/_/g, ' ')} must be a whole number above 0, or blank.`);
+    }
   }
   // two zones claiming the same postcodes with equally narrow ranges cannot be told apart
   for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {

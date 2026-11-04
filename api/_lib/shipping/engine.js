@@ -177,7 +177,7 @@ function packagingFor(pkg, prof, config) {
 // Packing: the fewest practical packages, respecting compatibility, size and weight limits.
 const areaM2 = (l, w) => l * w / 1e6;
 
-function packRigid(items, config, profileKey) {
+function packRigid(items, config, profileKey, budget) {
   const prof = config.profiles[profileKey], mats = config.materials;
   const maxStack = prof.max_height_mm - prof.height_allowance_mm;   // material thickness that fits under the height cap
   const groups = prof.mix_materials ? [items] : Object.values(items.reduce((g, i) => ((g[i.material] = g[i.material] || []).push(i), g), {}));
@@ -208,7 +208,7 @@ function packRigid(items, config, profileKey) {
         const p = { base_l: it.length_mm, base_w: it.width_mm, stack_mm: 0, goods_g: 0, items: [] };
         const n = tryAdd(p);
         if (n < 1) fail('item_too_heavy', it.name);
-        p.items.push({ ...it, qty: n }); p.stack_mm += n * t; p.goods_g += n * unitG; left -= n; open.push(p);
+        budget.take(); p.items.push({ ...it, qty: n }); p.stack_mm += n * t; p.goods_g += n * unitG; left -= n; open.push(p);
       }
     }
     for (const p of open) {
@@ -224,7 +224,7 @@ const rigidDims = (l, w, stack, prof) => ({ length_mm: l + prof.edge_allowance_m
 // Roll diameter: D = sqrt(core² + 4 x thickness x length / pi), plus the packaging allowance.
 export const rollDiameter = (coreMm, thicknessMm, lengthMm, allowanceMm) => Math.sqrt(coreMm ** 2 + 4 * thicknessMm * lengthMm / Math.PI) + allowanceMm;
 
-function packRolled(items, config) {
+function packRolled(items, config, budget) {
   const prof = config.profiles.rolled, mats = config.materials;
   const units = items.map(it => {
     // roll across the shorter side when it fits the printer width, otherwise the longer side
@@ -232,7 +232,9 @@ function packRolled(items, config) {
     if (w > prof.max_printed_width_mm) fail('roll_too_wide', it.name);
     return { ...it, roll_w: w, roll_l: l };
   }).sort((a, b) => b.roll_w - a.roll_w);
-  const groups = prof.mix_widths ? [units] : Object.values(units.reduce((g, i) => ((g[i.roll_w] = g[i.roll_w] || []).push(i), g), {}));
+  // rolls share a tube only when the settings allow it: different widths (mix_widths) and different materials (mix_materials)
+  const key = i => `${prof.mix_widths ? '' : i.roll_w}|${prof.mix_materials === false ? i.material : ''}`;
+  const groups = Object.values(units.reduce((g, i) => ((g[key(i)] = g[key(i)] || []).push(i), g), {}));
   const out = [];
   for (const group of groups) {
     const open = [];
@@ -260,7 +262,7 @@ function packRolled(items, config) {
         const r = { width: it.roll_w, thick_len: 0, goods_g: 0, items: [] };
         const n = tryAdd(r);
         if (n < 1) fail(it.roll_w + prof.end_allowance_mm > prof.max_packed_width_mm ? 'roll_too_wide' : 'roll_too_long', it.name);
-        r.thick_len += n * m.thickness_mm * it.roll_l; r.goods_g += n * unitG; r.items.push({ ...it, qty: n }); left -= n; open.push(r);
+        budget.take(); r.thick_len += n * m.thickness_mm * it.roll_l; r.goods_g += n * unitG; r.items.push({ ...it, qty: n }); left -= n; open.push(r);
       }
     }
     for (const r of open) {
@@ -277,41 +279,61 @@ const rollDims = (width, thickLen, prof) => {
   return { length_mm: width + prof.end_allowance_mm, width_mm: D, height_mm: D, diameter_mm: D };
 };
 
-function packWallpaper(items, config) {
+// All wallpaper lines of the same material share rolls and cartons.
+function packWallpaper(items, config, budget) {
   const prof = config.profiles.wallpaper, mats = config.materials, out = [];
-  for (const it of items) {
-    const m = mats[it.material] || mats.wallpaper_smooth;
-    const area = areaM2(it.wall_w_mm, it.wall_h_mm) * it.qty * (1 + (prof.waste_bps || 0) / 10000);
+  const groups = Object.values(items.reduce((g, i) => { const k = mats[i.material] ? i.material : 'wallpaper_smooth'; (g[k] = g[k] || []).push(i); return g; }, {}));
+  for (const group of groups) {
+    const m = mats[group[0].material] || mats.wallpaper_smooth;
+    const area = group.reduce((t, it) => t + areaM2(it.wall_w_mm, it.wall_h_mm) * it.qty, 0) * (1 + (prof.waste_bps || 0) / 10000);
     let rolls = Math.max(1, Math.ceil(area / prof.roll_area_m2 - 1e-9));
     const rollG = Math.min(area, prof.roll_area_m2) * m.g_m2;
-    const c = prof.carton;
+    const c = prof.carton, name = [...new Set(group.map(i => i.name))].join(', ');
+    const walls = group.map(i => `${i.qty > 1 ? i.qty + ' x ' : ''}${i.wall_w_mm} x ${i.wall_h_mm} mm`).join(', ');
     while (rolls > 0) {
       let n = Math.min(rolls, prof.rolls_per_carton);
       const pkg = packagingFor({ shape: 'box', length_mm: c.length_mm, width_mm: c.width_mm, height_mm: c.height_mm }, prof, config);
       while (n > 0 && n * rollG + pkg.weight_g > prof.max_weight_g) n--;
-      if (n < 1) fail('item_too_heavy', it.name);
+      if (n < 1) fail('item_too_heavy', name);
+      budget.take();
       out.push(finish({ profile: 'wallpaper', shape: 'box', length_mm: c.length_mm, width_mm: c.width_mm, height_mm: c.height_mm, goods_g: n * rollG,
-        contents: [{ name: it.name, qty: n, note: `${n} roll${n > 1 ? 's' : ''} for ${it.wall_w_mm} x ${it.wall_h_mm} mm` }] }, prof, config));
+        contents: [{ name, qty: n, note: `${n} roll${n > 1 ? 's' : ''}, walls ${walls}` }] }, prof, config));
       rolls -= n;
     }
   }
   return out;
 }
 
-function packUnits(items, config) {
-  const prof = config.profiles.unit, out = [];
-  for (const it of items) {
-    const u = it.model || config.units[it.unit];
+// Fill packages in turn with items that pack the same way (same parcel model, or the same flat-pack blank),
+// so two cart lines of the same thing share packages just as one line would.
+function fillSequential(group, perPackage, unitG, emptyPkgG, maxG, budget, make) {
+  const out = []; let cur = null;
+  const close = () => { if (cur) out.push(make(cur)); cur = null; };
+  for (const it of group) {
     let left = it.qty;
     while (left > 0) {
-      let n = Math.min(left, Math.max(1, u.per_package || 1));
-      const pkg = packagingFor({ shape: 'box', length_mm: u.length_mm, width_mm: u.width_mm, height_mm: u.height_mm }, prof, config);
-      while (n > 0 && n * u.weight_g + pkg.weight_g > prof.max_weight_g) n--;
-      if (n < 1) fail('item_too_heavy', it.name);
-      out.push(finish({ profile: 'unit', shape: 'box', length_mm: u.length_mm, width_mm: u.width_mm, height_mm: u.height_mm, goods_g: n * u.weight_g,
-        contents: [{ name: it.name, qty: n, model: it.unit }] }, prof, config));
-      left -= n;
+      if (!cur) { budget.take(); cur = { n: 0, goods_g: 0, items: [] }; }
+      let n = Math.min(left, perPackage - cur.n);
+      while (n > 0 && emptyPkgG(cur.n + n) + cur.goods_g + n * unitG(it) > maxG) n--;
+      if (n < 1) { if (!cur.n) fail('item_too_heavy', it.name); close(); continue; }
+      cur.n += n; cur.goods_g += n * unitG(it); left -= n;
+      const last = cur.items[cur.items.length - 1];
+      if (last && last.name === it.name) last.qty += n; else cur.items.push({ name: it.name, qty: n });
+      if (cur.n >= perPackage) close();
     }
+  }
+  close();
+  return out;
+}
+function packUnits(items, config, budget) {
+  const prof = config.profiles.unit, out = [];
+  const groups = Object.values(items.reduce((g, i) => { const k = i.unit || `custom:${JSON.stringify(i.model)}`; (g[k] = g[k] || []).push(i); return g; }, {}));
+  for (const group of groups) {
+    const u = group[0].model || config.units[group[0].unit];
+    const pkg = packagingFor({ shape: 'box', length_mm: u.length_mm, width_mm: u.width_mm, height_mm: u.height_mm }, prof, config);
+    out.push(...fillSequential(group, Math.max(1, u.per_package || 1), () => u.weight_g, () => pkg.weight_g, prof.max_weight_g, budget,
+      c => finish({ profile: 'unit', shape: 'box', length_mm: u.length_mm, width_mm: u.width_mm, height_mm: u.height_mm, goods_g: c.goods_g,
+        contents: c.items.map(i => ({ ...i, model: group[0].unit })) }, prof, config)));
   }
   return out;
 }
@@ -326,27 +348,17 @@ export function flatSize(item, config) {
   else { a = L + W + 35; b = H + W; layers = 2; }
   return { l: Math.max(a, b), w: Math.min(a, b), thickness: board.thickness_mm * layers, unit_g: areaM2(a, b) * layers * board.g_m2 };
 }
-function packFlatpack(items, config) {
+function packFlatpack(items, config, budget) {
   const prof = config.profiles.flatpack, out = [];
-  for (const it of items) {
-    const f = flatSize(it, config);
+  const groups = Object.values(items.reduce((g, i) => { const k = `${i.board}|${i.formula}|${i.box_mm.join('x')}`; (g[k] = g[k] || []).push(i); return g; }, {}));
+  for (const group of groups) {
+    const f = flatSize(group[0], config);
     const maxN = Math.floor((prof.max_stack_mm - prof.protection_mm + 1e-9) / f.thickness);
-    if (maxN < 1) fail('item_too_thick', it.name);
-    let left = it.qty;
-    while (left > 0) {
-      let n = Math.min(left, maxN);
-      for (;;) {
-        const dims = { length_mm: f.l + prof.edge_allowance_mm, width_mm: f.w + prof.edge_allowance_mm, height_mm: Math.ceil(n * f.thickness + prof.protection_mm) };
-        const pkg = packagingFor({ shape: 'box', ...dims }, prof, config);
-        if (n * f.unit_g + pkg.weight_g <= prof.max_weight_g || n < 1) break;
-        n--;
-      }
-      if (n < 1) fail('item_too_heavy', it.name);
-      out.push(finish({ profile: 'flatpack', shape: 'box', length_mm: f.l + prof.edge_allowance_mm, width_mm: f.w + prof.edge_allowance_mm,
-        height_mm: Math.ceil(n * f.thickness + prof.protection_mm), goods_g: n * f.unit_g,
-        contents: [{ name: it.name, qty: n, note: `flat ${Math.round(f.l)} x ${Math.round(f.w)} mm, ${f.thickness} mm each` }] }, prof, config));
-      left -= n;
-    }
+    if (maxN < 1) fail('item_too_thick', group[0].name);
+    const dimsFor = n => ({ length_mm: f.l + prof.edge_allowance_mm, width_mm: f.w + prof.edge_allowance_mm, height_mm: Math.ceil(n * f.thickness + prof.protection_mm) });
+    out.push(...fillSequential(group, maxN, () => f.unit_g, n => packagingFor({ shape: 'box', ...dimsFor(n) }, prof, config).weight_g, prof.max_weight_g, budget,
+      c => finish({ profile: 'flatpack', shape: 'box', ...dimsFor(c.n), goods_g: c.goods_g,
+        contents: c.items.map(i => ({ ...i, note: `flat ${Math.round(f.l)} x ${Math.round(f.w)} mm, ${f.thickness} mm each` })) }, prof, config)));
   }
   return out;
 }
@@ -359,23 +371,41 @@ function finish(p, prof, config) {
     packaging: { cardboard_m2: +(pkg.cardboard_mm2 / 1e6).toFixed(4), bubble_m2: +(pkg.bubble_mm2 / 1e6).toFixed(4), cost: pkg.cost } };
 }
 
+export const MAX_PACKAGES_DEFAULT = 50;
 export function pack(items, config) {
   const by = p => items.filter(i => i.profile === p);
-  return [...packRigid(by('rigid'), config, 'rigid'), ...packRigid(by('flat'), config, 'flat'), ...packRolled(by('rolled'), config),
-    ...packWallpaper(by('wallpaper'), config), ...packUnits(by('unit'), config), ...packFlatpack(by('flatpack'), config)]
+  // more packages than this is a freight job, not a parcel order: "unavailable" (also keeps the work bounded)
+  const max = (config.feasibility && config.feasibility.max_packages) || MAX_PACKAGES_DEFAULT;
+  const budget = { used: 0, take() { if (++this.used > max) fail('too_many_packages', `more than ${max} packages`); } };
+  return [...packRigid(by('rigid'), config, 'rigid', budget), ...packRigid(by('flat'), config, 'flat', budget), ...packRolled(by('rolled'), config, budget),
+    ...packWallpaper(by('wallpaper'), config, budget), ...packUnits(by('unit'), config, budget), ...packFlatpack(by('flatpack'), config, budget)]
     .map((p, i) => ({ n: i + 1, ...p }));
 }
 
 // ---------------------------------------------------------------------------------------------
 // Pricing (sections 3, 4, 5, 11, 12)
+// Only the last band or tier may be open-ended; a blank limit anywhere else is broken settings, never "matches everything".
 export function bandFor(longestMm, config) {
-  for (const b of config.bands) if (b.up_to_mm == null || longestMm <= b.up_to_mm) return b;
-  return config.bands[config.bands.length - 1];
+  const bands = config.bands;
+  for (const [i, b] of bands.entries()) {
+    if (b.up_to_mm == null) { if (i !== bands.length - 1) fail('bad_settings', 'freight band limits'); return b; }
+    if (longestMm <= b.up_to_mm) return b;
+  }
+  fail('bad_settings', 'freight bands');
 }
-const tierFor = (tiers, value, key) => tiers.find(t => t[key] == null || value <= t[key]);
+const tierFor = (tiers, value, key) => {
+  for (const [i, t] of tiers.entries()) {
+    if (t[key] == null) { if (i !== tiers.length - 1) fail('bad_settings', 'surcharge limits'); return t; }
+    if (value <= t[key]) return t;
+  }
+  return null;
+};
 
 export function priceOrder(packages, zone, config) {
-  const pr = config.pricing, feas = { ...config.feasibility, ...(zone.feasibility || {}) };
+  // a zone's own package limits replace the general ones only where they are filled in
+  const feas = { ...config.feasibility };
+  for (const [k, v] of Object.entries(zone.feasibility || {})) if (v != null && v !== '') feas[k] = v;
+  const pr = config.pricing;
   const priced = packages.map(p => {
     if (p.length_mm > feas.max_length_mm || p.width_mm > feas.max_width_mm || p.height_mm > feas.max_height_mm || p.weight_g > feas.max_weight_g)
       fail('package_not_feasible', `package ${p.n}: ${p.length_mm} x ${p.width_mm} x ${p.height_mm} mm, ${p.weight_g} g`);
@@ -406,6 +436,7 @@ export function priceOrder(packages, zone, config) {
   const after_minimum = before_minimum < minimum ? minimum : before_minimum;
   const ex = pr.rounding === 'none' ? after_minimum : ceilDiv(after_minimum, 100n * UNIT) * 100n * UNIT;   // round up to the next whole dollar
   const ex_cents = Math.ceil(Number(ex * 100n / UNIT) / 100);   // whole cents (exact for whole dollars)
+  if (!(ex_cents > 0)) fail('zero_price', 'delivery worked out at $0');   // never charge nothing by accident
   const gst_cents = Math.round(ex_cents * pr.gst_bps / 10000);
   return {
     packages: priced,

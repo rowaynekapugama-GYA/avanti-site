@@ -47,7 +47,7 @@ export const SEED = {
 
   // Carrier/package feasibility: packages beyond these are not priced (unavailable, not a cheaper rate).
   // Can be overridden per zone (zone.feasibility). Provisional.
-  feasibility: { max_length_mm: 2500, max_width_mm: 1300, max_height_mm: 600, max_weight_g: 20000, verify: true },
+  feasibility: { max_length_mm: 2500, max_width_mm: 1300, max_height_mm: 600, max_weight_g: 20000, max_packages: 50, verify: true },
 
   zones: [
     zone('syd-metro', 'Sydney Metro', 'NSW', 'metro', [[1000, 1920], [2000, 2239], [2555, 2574], [2740, 2786]], bandRates(1100, 1600, 3000, 8500, 12500), true, SHIPPIT),
@@ -132,7 +132,7 @@ export const SEED = {
     rolled: {  // section 7
       label: 'Rolled prints', core_mm: 80, max_printed_width_mm: 1350, max_packed_width_mm: 1400, max_diameter_mm: 200, max_weight_g: 20000,
       end_allowance_mm: 50, diameter_allowance_mm: 20, core_g_per_m: 250, mix_widths: true, oversize: 'unavailable',
-      cardboard: 'tube', bubble: 'tube', verify: true,
+      cardboard: 'tube', bubble: 'tube', mix_materials: true, verify: true,
     },
     wallpaper: {   // section 7, own profile: rolls in cartons
       label: 'Wallpaper', roll_area_m2: 10, rolls_per_carton: 4, waste_bps: 1000, max_weight_g: 20000,

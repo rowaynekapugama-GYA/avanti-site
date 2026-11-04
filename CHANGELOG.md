@@ -1,5 +1,26 @@
 # Changelog
 
+## 4 November 2026: Shipping calculator (client spec v1.0)
+
+Delivery is now worked out from the cart and the customer's postcode, replacing the
+per-category delivery options. Full details, release steps and the list of values Avanti needs
+to confirm are in `SHIPPING-HANDOVER.md`.
+
+**Before deploying:** run `scripts/migrations/005-shipping-calculator.sql`, and approve at least
+one zone in Dashboard > Shipping. On the live site a zone only prices once it's approved; until
+then every postcode shows "Delivery pricing is currently unavailable" and can't pay online.
+(This replaces the 29 October note about setting per-category delivery prices.)
+
+- Checkout asks for the postcode and shows one option, **Standard Delivery**, inc GST.
+- Packing, freight bands, width and weight surcharges, packaging cost, 75% for additional
+  packages, $15 ex GST minimum, rounding up to the dollar, GST: all from one engine on the server.
+- Zones by postcode (metro, regional, remote, subzones, overrides), each enabled and approved
+  separately. Starting rates are the spec's provisional test rates.
+- Dashboard > Shipping: zones, freight pricing, products and packaging, simulator,
+  profitability, history. Settings are saved as versions; every order keeps the version it used
+  and a copy of its calculation that can't be changed.
+- Orders: delivery override with reason and history, courier cost and adjustments, margin.
+
 ## 29 October 2026: WooCommerce-style notifications, artwork and delivery safeguards
 
 **Before deploying:** Avanti must set delivery prices (Dashboard > Shipping) for every category

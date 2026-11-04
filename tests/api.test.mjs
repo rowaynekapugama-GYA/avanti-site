@@ -6,6 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { startMocks } from './mock-providers.mjs';
+import { SEED } from '../api/_lib/shipping/seed.js';
 
 const T = process.env;
 const mocks = await startMocks();
@@ -956,8 +957,15 @@ test('supply later: upload link emailed, Avanti told, customer uploads, team get
 const shipCart = [{ slug: 'foamboard', qty: 3, opts: { Thickness: 'Foamboard 5mm', Size: '600mm x 400mm', Printing: 'Single Side' } },
   { slug: 'pull-up-banner', qty: 1, opts: {} }, { slug: 'posters', qty: 2, opts: { Material: 'Poster paper 220GSM, matte or gloss finish', Size: 'A1', Finish: 'Gloss' } }];
 
+// shipping tests start from the starting settings, whatever an earlier run (or a person) saved
+async function shipStart() {
+  const g = await act(adminToken, 'shipping-get', {});
+  if (JSON.stringify(g.data.config) === JSON.stringify(SEED)) return;
+  const s = await act(adminToken, 'shipping-save', { config: structuredClone(SEED), note: 'test: starting settings', expect_version: g.data.version });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+}
 test('shipping: simulator gives exactly what checkout charges, from the same engine', async () => {
-  await reset();
+  await reset(); await shipStart();
   const sim = await act(adminToken, 'shipping-simulate', { postcode: '2164', lines: shipCart });
   assert.equal(sim.status, 200, JSON.stringify(sim.data));
   const q = await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: shipCart, postcode: '2164' } });
@@ -983,7 +991,7 @@ test('shipping: simulator gives exactly what checkout charges, from the same eng
 });
 
 test('shipping: settings are versioned; approvals are stamped; orders keep the version they used', async () => {
-  await reset();
+  await reset(); await shipStart();
   let g = await act(adminToken, 'shipping-get', {});
   assert.equal(g.status, 200); const v0 = g.data.version; assert.ok(v0 >= 1);
   assert.deepEqual(g.data.validation.errors, []);

@@ -1346,6 +1346,24 @@ h1 .gya-st { font-size: .8rem; margin-left: 8px; }
 .gya-media-item figcaption { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: .82rem; }
 .gya-media-item b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gya-links { margin: 0; padding-left: 18px; line-height: 2; }
+.gya-tin { width: 92px; }
+.gya-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 16px; align-items: start; }
+@media (max-width: 800px) { .gya-grid3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .gya-grid3 { grid-template-columns: 1fr; } }
+.gya-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1.5px solid var(--g-line); margin: 0 0 16px; }
+.gya-tabs button { background: none; border: 0; border-bottom: 2.5px solid transparent; margin-bottom: -1.5px; padding: 9px 12px; font: inherit; font-size: .9rem; cursor: pointer; color: var(--g-ink3); }
+.gya-tabs button.on { color: var(--g-ink); border-bottom-color: var(--g-ink); font-weight: 600; }
+.gya-shipbar { position: relative; z-index: 6; background: #fff; border: 1px solid var(--g-line); border-radius: var(--g-r); padding: 10px 14px; margin: 0 0 14px; display: grid; gap: 8px; }
+.gya-shipbar.dirty { border-color: #d98b00; background: #fffaf0; position: sticky; top: 84px; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.gya-shipbar > div:first-child { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.gya-ztable tr.on td { background: var(--g-paper); }
+.gya-zone-ed > td { background: var(--g-paper); padding: 14px 16px; }
+.gya-mini-t td { padding: 4px 6px; white-space: nowrap; } .gya-mini-t .gya-in { padding: 6px 8px; } .gya-mini-t .gya-tin { width: 72px; }
+.gya-zone-ed .gya-grid2 .gya-grid2 { grid-template-columns: 1fr; }
+.gya-simrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--g-line); }
+.gya-simrow select.gya-in { width: auto; max-width: 260px; }
+.gya-in.gya-bad { border-color: #b3261e; outline-color: #b3261e; }
+details.gya-card > summary { cursor: pointer; }
 .gya-warn { background: #fff4e0; border-left: 3px solid #d98b00; padding: 10px 14px; border-radius: 0 var(--g-r) var(--g-r) 0; font-size: .86rem; }
 .gya-err { color: var(--g-red); font-weight: 600; font-size: .86rem; }
 .gya-pad { padding: 40px; }
@@ -2979,43 +2997,6 @@ const GYA = (() => {
     });
   } });
 
-  /* ---------------- shipping ---------------- */
-  G.section({ id: 'shipping', label: 'Shipping', order: 30, async render(main) {
-    const [classes, rates, cats, set] = await Promise.all([load('shipping_classes', 'select=*&order=position', true), load('shipping_rates', 'select=*&order=class_slug,position', true),
-      load('categories', 'select=slug,name,shipping_class&order=position', true), load('site_settings', 'select=*&key=eq.ship_note', true)]);
-    const rate = (r = {}) => `<div class="gya-item gya-item-row" data-sort-item data-rate>${ui.grip}${ui.field('Delivery option', ui.text('rlabel', r.label, 'placeholder="e.g. Standard delivery"'))}${ui.field('Price', ui.num('ramount', r.amount))}
-      <span class="gya-item-side">${ui.moveBtns}<button type="button" class="gya-x" data-remove>Remove</button></span></div>`;
-    const cls = (c = {}) => `<div class="gya-item gya-ship" data-sort-item data-class="${esc(c.slug || '')}">${ui.grip}<div class="gya-item-body">
-      <div class="gya-grid2">${ui.field('Delivery group name', ui.text('clabel', c.label, 'placeholder="e.g. Banner Stands"'))}<div>${ui.check('ccourier', c.courier, 'Courier item: our team confirms delivery details')}</div></div>
-      <div class="gya-list" data-rates>${rates.filter(r => r.class_slug === c.slug).map(rate).join('')}</div><button type="button" class="gya-btn gya-btn-line gya-btn-sm" data-add-rate>Add delivery option</button>
-      ${ui.field('Note (optional)', ui.text('cnote', c.note))}
-      <fieldset class="gya-cats"><legend>Categories using these rates</legend>${cats.map(k => `<label class="gya-check"><input type="checkbox" name="ccat" value="${esc(k.slug)}" ${k.shipping_class && k.shipping_class === c.slug ? 'checked' : ''}><span>${esc(k.name)}</span></label>`).join('')}</fieldset></div>
-      <div class="gya-item-side">${ui.moveBtns}<button type="button" class="gya-x" data-remove>Remove</button></div></div>`;
-    main.innerHTML = head('Shipping', 'Delivery options and prices by category. Categories not ticked anywhere show "Quoted at checkout".', '<button class="gya-btn gya-btn-red" id="gyaSave">Save</button>') +
-      ui.card('Delivery note', `${ui.field('Shown in the cart for courier items', ui.area('ship_note', set[0] ? set[0].value : '', 2, 'id="gyaShipNote"'))}`) +
-      `<div class="gya-card"><div class="gya-list" id="gyaList">${classes.map(cls).join('')}</div><button type="button" class="gya-btn gya-btn-line gya-btn-sm" id="gyaAdd">Add delivery group</button></div>`;
-    const list = qs('#gyaList', main); sortable(list); qsa('[data-rates]', list).forEach(r => sortable(r));
-    main.addEventListener('input', markDirty);
-    list.addEventListener('change', e => { markDirty(); if (e.target.name !== 'ccat' || !e.target.checked) return;   // a category belongs to one group only
-      qsa(`[name=ccat][value="${CSS.escape(e.target.value)}"]`, list).forEach(x => { if (x !== e.target) x.checked = false; }); });
-    list.addEventListener('click', e => {
-      const a = e.target.closest('[data-add-rate]'); if (a) { const rl = qs('[data-rates]', a.closest('.gya-ship')); rl.insertAdjacentHTML('beforeend', rate()); sortable(rl); markDirty(); return; }
-      const r = e.target.closest('[data-remove]'); if (r) { r.closest('[data-sort-item]').remove(); markDirty(); } });
-    qs('#gyaAdd', main).onclick = () => { list.insertAdjacentHTML('beforeend', cls()); sortable(qs('.gya-ship:last-child [data-rates]', list)); markDirty(); };
-    qs('#gyaSave', main).onclick = e => busy(e.currentTarget, async () => {
-      const used = new Set();
-      const out = qsa('.gya-ship', list).map(it => {
-        const label = qs('[name=clabel]', it).value.trim(); if (!label) throw new Error('Every delivery group needs a name.');
-        let slug = it.dataset.class || slugify(label) || 'group'; while (used.has(slug)) slug += '-2'; used.add(slug);
-        const rs = qsa('[data-rate]', it).map(x => ({ label: qs('[name=rlabel]', x).value.trim(), amount: num(qs('[name=ramount]', x).value) })).filter(x => x.label || x.amount != null);
-        if (rs.some(x => !x.label || x.amount == null)) throw new Error(`Each delivery option in "${label}" needs a name and a price.`);
-        return { slug, label, courier: qs('[name=ccourier]', it).checked, note: qs('[name=cnote]', it).value.trim() || null, rates: rs, categories: qsa('[name=ccat]:checked', it).map(x => x.value) };
-      });
-      await rpc('admin_save_shipping', { payload: { classes: out } });
-      await upsert('site_settings', [{ key: 'ship_note', value: qs('#gyaShipNote', main).value.trim() }], 'key');
-      markClean(); invalidate(); await refreshPublic(); toast('Shipping saved'); this.render(main);
-    });
-  } });
 })(GYA);
 
 /* ==== GYA CMS v1 : orders & marketing module ==================================
@@ -3152,6 +3133,7 @@ const GYA = (() => {
             <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
             <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
             ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
+          <div id="odShipCard"></div>
           <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
             ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}${items.some(i => i.artwork && i.artwork.later) && ['paid', 'in_production'].includes(o.status) ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="artwork">Resend artwork upload link</button>' : ''}</div>
               <p class="gya-muted gya-small">Each email goes out once automatically. Resend sends it again, even if it went before.</p>` : ''}</section>
@@ -3197,8 +3179,335 @@ const GYA = (() => {
         if (mail) toast(r.status === 'failed' ? 'The note could not be emailed. See the timeline.' : `Note ${r.status === 'logged' ? 'recorded' : 'emailed'} to ${r.to}`, r.status === 'failed');
         orderDetail(main, id); }); };
     qsa('[data-dl]', main).forEach(b => b.onclick = () => G.download('artwork', b.dataset.dl).catch(e => toast(e.message, true)));
+    shOrderCard(o).then(h => { const box = qs('#odShipCard', main); if (!box || !h) return; box.innerHTML = h; shOrderWire(main, o, () => orderDetail(main, id)); }).catch(() => {});
   }
   G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
+
+  /* ---------------- Shipping calculator: settings, simulator, profitability ----------------
+     Settings are edited here as a draft and saved as a new version (the server validates them).
+     Every price on this page comes from the server's shipping engine, the same one checkout uses. */
+  const SH = { tab: 'zones', cur: null, draft: null, open: null, products: null, options: null, sim: { postcode: '2164', useDraft: true, rows: [] }, profit: {} };
+  const SH_PROFILES = [['rigid', 'Rigid signage'], ['poster', 'Posters (A4/A3 flat, larger rolled)'], ['rolled', 'Rolled prints'], ['flat', 'Flat prints'], ['wallpaper', 'Wallpaper'], ['unit', 'Fixed-size parcel'], ['flatpack', 'Flat-pack boxes']];
+  const SH_STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+  const shGet = (o, path) => path.split('.').reduce((x, k) => x == null ? x : x[k], o);
+  const shSet = (o, path, v) => { const ks = path.split('.'); let x = o; ks.slice(0, -1).forEach((k, i) => { if (x[k] == null) x[k] = /^\d+$/.test(ks[i + 1]) ? [] : {}; x = x[k]; }); x[ks[ks.length - 1]] = v; };
+  // input kinds: money (cents as $), pct (basis points as %), kg (grams as kg), int (whole number), num, text, bool, ranges, words, approval
+  const shFrom = (kind, el) => {
+    if (kind === 'bool') return el.checked;
+    if (kind === 'approval') return el.checked ? { status: 'approved' } : { status: 'provisional', by: null, at: null };
+    const s = String(el.value).trim();
+    if (kind === 'text') return s;
+    if (kind === 'words') return s.split(',').map(x => x.trim()).filter(Boolean);
+    if (kind === 'ranges') { const out = []; for (const t of s.split(/[\s,]+/).filter(Boolean)) { const m = t.match(/^(\d{3,4})(?:-(\d{3,4}))?$/); if (!m) return NaN; out.push([+m[1], +(m[2] || m[1])]); } return out; }
+    if (s === '') return null;
+    const n = Number(s); if (!isFinite(n)) return NaN;
+    return kind === 'money' || kind === 'pct' ? Math.round(n * 100) : kind === 'kg' ? Math.round(n * 1000) : kind === 'int' ? Math.round(n) : n;
+  };
+  const shTo = (kind, v) => v == null ? '' : kind === 'money' ? (v / 100).toFixed(2) : kind === 'pct' ? String(v / 100) : kind === 'kg' ? String(v / 1000)
+    : kind === 'ranges' ? (v || []).map(([a, b]) => a === b ? String(a).padStart(4, '0') : `${String(a).padStart(4, '0')}-${String(b).padStart(4, '0')}`).join(', ')
+    : kind === 'words' ? (v || []).join(', ') : String(v);
+  const shIn = (path, kind, attrs = '') => `<input class="gya-in ${kind === 'ranges' || kind === 'text' || kind === 'words' ? '' : 'gya-tin'}" data-p="${esc(path)}" data-k="${kind}" value="${esc(shTo(kind, shGet(SH.draft, path)))}" ${['money', 'pct', 'kg', 'int', 'num'].includes(kind) ? 'inputmode="decimal"' : ''} ${attrs}>`;
+  const shFld = (label, path, kind, hint = '') => ui.field(label, shIn(path, kind), hint);
+  const shChk = (label, path, kind = 'bool') => { const v = shGet(SH.draft, path); const on = kind === 'approval' ? v && v.status === 'approved' : !!v;
+    return `<label class="gya-check"><input type="checkbox" data-p="${esc(path)}" data-k="${kind}" ${on ? 'checked' : ''}><span>${label}</span></label>`; };
+  const shSel = (label, path, opts, blank) => { const v = shGet(SH.draft, path); const sel = `<select class="gya-in" data-p="${esc(path)}" data-k="${blank ? 'textnull' : 'text'}">${blank ? `<option value="">${esc(blank)}</option>` : ''}${opts.map(([val, l]) => `<option value="${esc(val)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    return label ? ui.field(label, sel) : sel; };
+  const shDollars = s => { if (s == null) return '–'; const t = String(s); return '$' + (/\.\d{2}00$/.test(t) ? t.slice(0, -2) : t); };
+  const shKg = g => g == null ? '–' : (g / 1000).toLocaleString('en-AU', { maximumFractionDigits: 2 }) + ' kg';
+  const shDirty = () => JSON.stringify(SH.draft) !== JSON.stringify(SH.cur.config);
+  const BAND_LABEL = { small: 'Small', medium: 'Medium', large: 'Large', os1: 'Oversized 1', os2: 'Oversized 2' };
+
+  function shBar() {
+    const c = SH.cur, v = (c.versions || [])[0], dirty = shDirty();
+    return `<div class="gya-shipbar ${dirty ? 'dirty' : ''}"><div><b>${dirty ? 'Unsaved changes' : `Settings version ${c.version}`}</b>
+        <span class="gya-muted gya-small">${c.unsaved ? 'Database update 005 not run yet: showing the starting settings.' : dirty ? ` to version ${c.version}. Checkout keeps using version ${c.version} until you save.` : v ? ` saved ${dtt(v.created_at)} by ${esc(String(v.created_by).replace('admin:', ''))}${v.note ? `: ${esc(v.note)}` : ''}` : ''}</span></div>
+      ${dirty ? `<div class="gya-row"><input class="gya-in" id="shNote" placeholder="What changed? (for the history)" style="min-width:220px"><button class="gya-btn gya-btn-red gya-btn-sm" id="shSave">Save as version ${c.version + 1}</button><button class="gya-btn gya-btn-line gya-btn-sm" id="shDiscard">Discard</button></div>` : ''}
+      <div id="shCheck">${shValidationHtml(SH.validation)}</div></div>`;
+  }
+  function shValidationHtml(v) {
+    if (!v) return '';
+    return (v.errors.length ? `<div class="gya-warn" style="margin-top:8px"><b>Fix before saving:</b><ul>${v.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>` : '')
+      + (v.warnings.length ? `<details style="margin-top:8px"><summary class="gya-small">${v.warnings.length} note${v.warnings.length > 1 ? 's' : ''} about these settings</summary><ul class="gya-small">${v.warnings.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : '');
+  }
+
+  function shZones() {
+    const zones = SH.draft.zones || [], req = SH.cur.require_approval;
+    const row = (z, i) => { const r = z.rates || {}, approved = z.approval && z.approval.status === 'approved';
+      return `<tr class="${SH.open === i ? 'on' : ''}"><td><b>${esc(z.name || z.id)}</b>${z.subzone ? `<div class="gya-muted gya-small">${esc(z.subzone)}</div>` : ''}</td><td>${esc(z.state)}</td><td>${esc((z.class || '')[0].toUpperCase() + (z.class || '').slice(1))}</td>
+        <td class="gya-small">${esc(shTo('ranges', z.ranges).slice(0, 60)) || '<span class="gya-muted">none</span>'}${shTo('ranges', z.ranges).length > 60 ? '…' : ''}</td>
+        <td class="gya-small gya-nowrap">${['small', 'medium', 'large', 'os1', 'os2'].map(k => r[k] == null ? '–' : '$' + (r[k] / 100)).join(' / ')}</td>
+        <td>${pill(z.enabled ? 'subscribed' : 'unsubscribed', z.enabled ? 'Enabled' : 'Disabled')} ${pill(approved ? 'sent' : 'scheduled', approved ? 'Approved' : 'Provisional')}</td>
+        <td><button class="gya-btn gya-btn-line gya-btn-sm" data-zone="${i}">${SH.open === i ? 'Close' : 'Edit'}</button></td></tr>
+        ${SH.open === i ? `<tr class="gya-zone-ed"><td colspan="7">${shZoneEditor(z, i)}</td></tr>` : ''}`; };
+    const ov = SH.draft.postcode_overrides || [];
+    return `<section class="gya-card"><div class="gya-row" style="justify-content:space-between"><h3 style="margin:0">Find a postcode</h3>
+        <div class="gya-row"><input class="gya-in gya-tin" id="shLookPc" placeholder="2164" inputmode="numeric" maxlength="4"><button class="gya-btn gya-btn-line gya-btn-sm" id="shLook">Find zone</button></div></div>
+        <p id="shLookOut" class="gya-small" style="margin:8px 0 0"></p></section>
+      <p class="gya-note gya-small">${req ? 'On this site a zone only prices once it is <b>enabled and approved</b>. Anything else shows: "Delivery pricing is currently unavailable for your postcode. Please contact us for a shipping quote."'
+        : 'This is a test site: enabled zones price even if not yet approved. On the live site they also need to be approved.'} Where two zones cover a postcode, the narrower range wins (Sydney Metro over NSW Regional).</p>
+      <section class="gya-card gya-pad0"><div class="gya-table-wrap"><table class="gya-table gya-ztable"><thead><tr><th>Zone</th><th>State</th><th>Class</th><th>Postcodes</th><th>Base rates S / M / L / O1 / O2</th><th>Status</th><th></th></tr></thead>
+        <tbody>${zones.map(row).join('')}</tbody></table></div>
+        <p style="padding:0 14px 14px"><button class="gya-btn gya-btn-line gya-btn-sm" id="shAddZone">Add a zone</button></p></section>
+      <section class="gya-card"><h3>Postcode overrides</h3><p class="gya-muted gya-small">Send a single postcode to a chosen zone, whatever its ranges say.</p>
+        ${ov.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Postcode</th><th>Zone</th><th>Note</th><th></th></tr></thead><tbody>${ov.map((o, i) => `<tr><td>${shIn(`postcode_overrides.${i}.postcode`, 'text', 'maxlength="4" style="width:80px"')}</td><td>${shSel('', `postcode_overrides.${i}.zone_id`, zones.map(z => [z.id, z.name]))}</td><td>${shIn(`postcode_overrides.${i}.note`, 'text')}</td><td><button class="gya-x" data-del-ov="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+        <button class="gya-btn gya-btn-line gya-btn-sm" id="shAddOv">Add an override</button></section>`;
+  }
+  function shZoneEditor(z, i) {
+    const p = `zones.${i}`, ap = z.approval || {};
+    const tiersW = (z.width_tiers || []).map((t, k) => `<tr><td>${t.up_to_mm == null ? `Over ${(z.width_tiers[k - 1] || {}).up_to_mm || 0} mm` : `Up to ${shIn(`${p}.width_tiers.${k}.up_to_mm`, 'int')} mm`}</td><td>${shIn(`${p}.width_tiers.${k}.bps`, 'pct')} %</td></tr>`).join('');
+    const tiersG = (z.weight_tiers || []).map((t, k) => `<tr><td>Up to ${shIn(`${p}.weight_tiers.${k}.up_to_g`, 'kg')} kg</td><td>$ ${shIn(`${p}.weight_tiers.${k}.cents`, 'money')}</td></tr>`).join('');
+    return `<div class="gya-grid2">
+        <div>${shFld('Zone name', `${p}.name`, 'text')}
+          <div class="gya-grid2">${shSel('State', `${p}.state`, SH_STATES.map(s => [s, s]))}${shSel('Class', `${p}.class`, [['metro', 'Metro'], ['regional', 'Regional'], ['remote', 'Remote']])}</div>
+          ${shFld('Subzone (optional)', `${p}.subzone`, 'text')}
+          ${ui.field('Postcodes', `<textarea class="gya-in" rows="3" data-p="${p}.ranges" data-k="ranges">${esc(shTo('ranges', z.ranges))}</textarea>`, 'Ranges and single postcodes, separated by commas: 2000-2239, 2555-2574, 2770')}
+          <div class="gya-checks">${shChk('Enabled', `${p}.enabled`)}${shChk(`Approved for the live site${ap.status === 'approved' && ap.by ? ` <span class="gya-muted">(by ${esc(String(ap.by).replace('admin:', ''))}, ${dt(ap.at)})</span>` : ''}`, `${p}.approval`, 'approval')}</div>
+          ${z.source ? `<p class="gya-muted gya-small">Postcode source: ${esc(z.source)}</p>` : ''}</div>
+        <div><b class="gya-small">Base freight, ex GST (blank = not priced)</b>
+          <div class="gya-table-wrap"><table class="gya-table gya-mini-t"><tbody>${['small', 'medium', 'large', 'os1', 'os2'].map(k => { const b = (SH.draft.bands || []).find(x => x.key === k) || {}; const prev = (SH.draft.bands || [])[(SH.draft.bands || []).indexOf(b) - 1];
+            return `<tr><td>${BAND_LABEL[k]} <span class="gya-muted gya-small">${b.up_to_mm ? `${prev ? prev.up_to_mm + 1 : 0}–${b.up_to_mm} mm` : `over ${prev ? prev.up_to_mm : ''} mm`}</span></td><td>$ ${shIn(`${p}.rates.${k}`, 'money')}</td></tr>`; }).join('')}</tbody></table></div>
+          <div class="gya-grid2"><div><b class="gya-small">Width surcharge (second-longest side)</b><table class="gya-table gya-mini-t"><tbody>${tiersW}</tbody></table></div>
+            <div><b class="gya-small">Weight surcharge (per package)</b><table class="gya-table gya-mini-t"><tbody>${tiersG}</tbody></table></div></div>
+          <details><summary class="gya-small">Package limits for this zone (optional)</summary><div class="gya-grid2">${shFld('Max length (mm)', `${p}.feasibility.max_length_mm`, 'int')}${shFld('Max width (mm)', `${p}.feasibility.max_width_mm`, 'int')}${shFld('Max height (mm)', `${p}.feasibility.max_height_mm`, 'int')}${shFld('Max weight (kg)', `${p}.feasibility.max_weight_g`, 'kg')}</div><p class="gya-muted gya-small">Blank = use the general limits on the Freight pricing tab.</p></details>
+        </div></div>
+      <p style="text-align:right"><button class="gya-x" data-del-zone="${i}">Delete this zone</button></p>`;
+  }
+  function shPricing() {
+    const zones = SH.draft.zones || [];
+    return `<section class="gya-card"><h3>Order total</h3><div class="gya-grid3">
+        ${shFld('Freight markup (%)', 'pricing.freight_markup_bps', 'pct', 'On the discounted base freight')}${shFld('Additional packages pay (%)', 'pricing.additional_package_bps', 'pct', 'Of their own base rate. The dearest package pays 100%.')}
+        ${shFld('Packaging markup (%)', 'pricing.packaging_markup_bps', 'pct')}${shFld('Minimum delivery, ex GST ($)', 'pricing.minimum_ex_gst_cents', 'money')}
+        ${shSel('Rounding', 'pricing.rounding', [['ceil_dollar', 'Round up to the next whole dollar'], ['none', 'No rounding']])}${shFld('GST (%)', 'pricing.gst_bps', 'pct')}</div>
+        ${shChk('Oversized packages can get the additional-package rate', 'pricing.oversized_discount_eligible')}
+        <p class="gya-muted gya-small">Sequence: base freight (dearest package 100%, others at the additional rate) × freight markup, plus every package's width and weight surcharges, plus packaging cost × packaging markup; then the minimum, then rounding; GST added on top. Surcharges and packaging are never discounted.</p></section>
+      <section class="gya-card"><h3>Freight bands (longest packed side)</h3><div class="gya-grid3">${(SH.draft.bands || []).slice(0, 4).map((b, i) => shFld(`${b.label} up to (mm)`, `bands.${i}.up_to_mm`, 'int')).join('')}<div class="gya-field"><span>${esc((SH.draft.bands || [])[4] ? SH.draft.bands[4].label : 'Oversized 2')}</span><p class="gya-muted gya-small">Everything longer</p></div></div></section>
+      <section class="gya-card"><h3>Package limits (carrier feasibility)</h3><p class="gya-muted gya-small">A package over any of these is not priced: the customer sees the "unavailable" message instead of an ordinary parcel rate.</p>
+        <div class="gya-grid3">${shFld('Max length (mm)', 'feasibility.max_length_mm', 'int')}${shFld('Max width (mm)', 'feasibility.max_width_mm', 'int')}${shFld('Max height (mm)', 'feasibility.max_height_mm', 'int')}${shFld('Max weight (kg)', 'feasibility.max_weight_g', 'kg')}</div></section>
+      <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Base rates by zone, ex GST</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Zone</th>${['small', 'medium', 'large', 'os1', 'os2'].map(k => `<th>${BAND_LABEL[k]}</th>`).join('')}</tr></thead><tbody>
+        ${zones.map((z, i) => `<tr><td>${esc(z.name)} ${z.enabled ? '' : '<span class="gya-muted gya-small">(disabled)</span>'}</td>${['small', 'medium', 'large', 'os1', 'os2'].map(k => `<td>${shIn(`zones.${i}.rates.${k}`, 'money')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+        <p class="gya-muted gya-small" style="padding:0 18px 14px">Width and weight surcharges are set per zone on the Zones tab. Never copy one zone's rates into another unless they have been checked for that destination.</p></section>`;
+  }
+  function shProducts() {
+    const d = SH.draft, mats = Object.entries(d.materials || {}), units = Object.entries(d.units || {}), boards = Object.entries((d.flatpack && d.flatpack.boards) || {});
+    const matOpts = mats.map(([k, m]) => [k, m.label || k]), unitOpts = units.map(([k, u]) => [k, u.label || k]);
+    const cats = Object.keys((d.catalogue && d.catalogue.categories) || {}), prods = Object.entries((d.catalogue && d.catalogue.products) || {});
+    const prof = (key, title, fields) => `<details class="gya-card"><summary><b>${title}</b></summary><div class="gya-grid3" style="margin-top:10px">${fields.map(([l, k, kind, opts]) => kind === 'select' ? shSel(l, `profiles.${key}.${k}`, opts) : kind === 'bool' ? `<div>${shChk(l, `profiles.${key}.${k}`)}</div>` : shFld(l, `profiles.${key}.${k}`, kind)).join('')}</div></details>`;
+    const packOpts = [['box', 'Box (surface area)'], ['wrap', 'Wrapped (surface area)'], ['tube', 'Tube'], ['none', 'None']];
+    return `<section class="gya-card"><h3>Packaging cost (per package)</h3><div class="gya-grid3">
+        ${shFld('Cardboard ($/m²)', 'packaging.cardboard_cents_m2', 'money')}${shFld('Bubble wrap ($/m²)', 'packaging.bubble_cents_m2', 'money')}${shFld('Packing labour ($/package)', 'packaging.labour_cents', 'money')}
+        ${shFld('Tape and consumables ($/package)', 'packaging.tape_cents', 'money')}${shFld('Waste allowance (%)', 'packaging.waste_bps', 'pct', 'Added to measured cardboard and bubble-wrap areas')}<div></div>
+        ${shFld('Cardboard weight (kg/m²)', 'packaging.cardboard_g_m2', 'kg')}${shFld('Bubble wrap weight (kg/m²)', 'packaging.bubble_g_m2', 'kg')}</div>
+        <p class="gya-muted gya-small">Areas come from each package's packed size: boxes use the box surface 2(LW + LH + WH); tubes use π × diameter × length plus two end caps. Packaging weight is added to the package weight.</p></section>
+      <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Materials</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Material</th><th>Thickness (mm)</th><th>Weight (kg/m²)</th><th></th></tr></thead><tbody>
+        ${mats.map(([k]) => `<tr><td>${shIn(`materials.${k}.label`, 'text')}<div class="gya-muted gya-small">${esc(k)}</div></td><td>${shIn(`materials.${k}.thickness_mm`, 'num')}</td><td>${shIn(`materials.${k}.g_m2`, 'kg')}</td><td><button class="gya-x" data-del-mat="${esc(k)}">Remove</button></td></tr>`).join('')}</tbody></table></div>
+        <div class="gya-row" style="padding:0 18px 14px"><input class="gya-in" id="shNewMat" placeholder="New material, e.g. Corflute 10mm" style="max-width:260px"><button class="gya-btn gya-btn-line gya-btn-sm" id="shAddMat">Add material</button></div></section>
+      <section class="gya-card"><h3>How product options pick a material</h3><p class="gya-muted gya-small">The first rule whose words all appear in the customer's chosen options wins.</p>
+        <div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Words (comma separated)</th><th>Material</th><th></th></tr></thead><tbody>${(d.material_rules || []).map((r, i) => `<tr><td>${shIn(`material_rules.${i}.match`, 'words')}</td><td>${shSel('', `material_rules.${i}.material`, matOpts)}</td><td><button class="gya-x" data-del-rule="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
+        <button class="gya-btn gya-btn-line gya-btn-sm" id="shAddRule">Add a rule</button></section>
+      ${prof('rigid', 'Rigid signage packing', [['Edge allowance (mm)', 'edge_allowance_mm', 'int'], ['Height allowance (mm)', 'height_allowance_mm', 'int'], ['Minimum height (mm)', 'min_height_mm', 'int'], ['Maximum height (mm)', 'max_height_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg'],
+        ['Stacking different sizes', 'stacking', 'select', [['same_size', 'Same size only'], ['fit_within', 'Smaller boards on a larger one']]], ['Different materials may share a box', 'mix_materials', 'bool'], ['Cardboard', 'cardboard', 'select', packOpts], ['Bubble wrap', 'bubble', 'select', packOpts]])}
+      ${prof('flat', 'Flat prints (A4/A3) packing', [['Edge allowance (mm)', 'edge_allowance_mm', 'int'], ['Height allowance (mm)', 'height_allowance_mm', 'int'], ['Minimum height (mm)', 'min_height_mm', 'int'], ['Maximum height (mm)', 'max_height_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg'],
+        ['Stacking different sizes', 'stacking', 'select', [['same_size', 'Same size only'], ['fit_within', 'Smaller on larger']]], ['Cardboard', 'cardboard', 'select', packOpts], ['Bubble wrap', 'bubble', 'select', packOpts]])}
+      ${prof('rolled', 'Rolled prints packing', [['Core diameter (mm)', 'core_mm', 'int'], ['Max printed width (mm)', 'max_printed_width_mm', 'int'], ['Max packed roll width (mm)', 'max_packed_width_mm', 'int'], ['Max finished diameter (mm)', 'max_diameter_mm', 'int'],
+        ['End allowance (mm)', 'end_allowance_mm', 'int'], ['Diameter allowance (mm)', 'diameter_allowance_mm', 'int'], ['Core weight (kg per metre)', 'core_g_per_m', 'kg'], ['Maximum weight (kg)', 'max_weight_g', 'kg'], ['Different widths may share a roll', 'mix_widths', 'bool']])}
+      ${prof('wallpaper', 'Wallpaper packing', [['Area per roll (m²)', 'roll_area_m2', 'num'], ['Rolls per carton', 'rolls_per_carton', 'int'], ['Waste allowance (%)', 'waste_bps', 'pct'], ['Carton length (mm)', 'carton.length_mm', 'int'], ['Carton width (mm)', 'carton.width_mm', 'int'], ['Carton height (mm)', 'carton.height_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg']])}
+      ${prof('flatpack', 'Flat-pack boxes packing', [['Edge allowance (mm)', 'edge_allowance_mm', 'int'], ['Protection allowance (mm)', 'protection_mm', 'int'], ['Maximum stack height (mm)', 'max_stack_mm', 'int'], ['Maximum weight (kg)', 'max_weight_g', 'kg']])}
+      <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Fixed-size parcels (A-frames, banners, cake toppers, samples)</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Parcel</th><th>L (mm)</th><th>W (mm)</th><th>H (mm)</th><th>Weight per unit (kg)</th><th>Units per package</th><th></th></tr></thead><tbody>
+        ${units.map(([k]) => `<tr><td>${shIn(`units.${k}.label`, 'text')}<div class="gya-muted gya-small">${esc(k)}</div></td>${['length_mm', 'width_mm', 'height_mm'].map(f => `<td>${shIn(`units.${k}.${f}`, 'int')}</td>`).join('')}<td>${shIn(`units.${k}.weight_g`, 'kg')}</td><td>${shIn(`units.${k}.per_package`, 'int')}</td><td><button class="gya-x" data-del-unit="${esc(k)}">Remove</button></td></tr>`).join('')}</tbody></table></div>
+        <div class="gya-row" style="padding:0 18px 14px"><input class="gya-in" id="shNewUnit" placeholder="New parcel, e.g. Large pull up banner" style="max-width:260px"><button class="gya-btn gya-btn-line gya-btn-sm" id="shAddUnit">Add parcel</button></div></section>
+      <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Flat-pack board</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Board (as named in product options)</th><th>Thickness (mm)</th><th>Weight (kg/m²)</th></tr></thead><tbody>
+        ${boards.map(([k]) => `<tr><td>${esc(k)}</td><td>${shIn(`flatpack.boards.${k}.thickness_mm`, 'num')}</td><td>${shIn(`flatpack.boards.${k}.g_m2`, 'kg')}</td></tr>`).join('')}</tbody></table></div>
+        <p class="gya-muted gya-small" style="padding:0 18px 14px">Flat size from the box size: shipping cartons (L + W + 35) × (H + W), folded flat in 2 layers; mailer boxes (2W + 3H + 40) × (L + 2H + 20), 1 layer. Never the assembled box size.</p></section>
+      <section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">Which packing each category uses</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Category</th><th>Packing</th><th>Material (optional)</th><th>Parcel (fixed-size only)</th><th>Flat-pack style</th></tr></thead><tbody>
+        ${cats.map(k => `<tr><td>${esc(k)}</td><td>${shSel('', `catalogue.categories.${k}.profile`, SH_PROFILES)}</td><td>${shSel('', `catalogue.categories.${k}.material`, matOpts, 'From the options')}</td><td>${shSel('', `catalogue.categories.${k}.unit`, unitOpts, '–')}</td><td>${shSel('', `catalogue.categories.${k}.formula`, [['rsc', 'Shipping carton'], ['mailer', 'Mailer box']], '–')}</td></tr>`).join('')}</tbody></table></div>
+        <h3 style="padding:8px 18px 0">Product exceptions</h3><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Product</th><th>Packing</th><th>Parcel</th><th>Parcel by size</th></tr></thead><tbody>
+        ${prods.map(([k, m]) => `<tr><td>${esc(k)}</td><td>${shSel('', `catalogue.products.${k}.profile`, SH_PROFILES)}</td><td>${m.unit_by_size ? '–' : shSel('', `catalogue.products.${k}.unit`, unitOpts, '–')}</td>
+          <td>${m.unit_by_size ? Object.keys(m.unit_by_size).map(sz => `<div class="gya-small">${esc(sz)}: ${shSel('', `catalogue.products.${k}.unit_by_size.${sz}`, unitOpts)}</div>`).join('') : '–'}</td></tr>`).join('')}</tbody></table></div></section>`;
+  }
+
+  // ---- simulator
+  async function shLoadProducts() {
+    if (SH.products) return;
+    const [ps, os] = await Promise.all([rest('products?select=slug,name,category_slug,pricing_mode,wall_dims&order=name'), rest('product_options?select=product_slug,name,choices,position&order=position')]);
+    SH.products = ps; SH.options = os;
+  }
+  function shSimRow(r, i) {
+    if (r.type === 'custom') {
+      const s = r.spec, mats = Object.entries(SH.draft.materials || {});
+      const dims = s.profile === 'unit' ? ['length_mm', 'width_mm', 'height_mm'] : s.profile === 'flatpack' ? [] : s.profile === 'wallpaper' ? ['wall_w_mm', 'wall_h_mm'] : ['length_mm', 'width_mm'];
+      return `<div class="gya-simrow" data-row="${i}"><select class="gya-in" data-s="spec.profile">${[['rigid', 'Rigid signage'], ['flat', 'Flat print'], ['rolled', 'Rolled print'], ['unit', 'Parcel'], ['flatpack', 'Flat-pack box'], ['wallpaper', 'Wallpaper']].map(([v, l]) => `<option value="${v}" ${s.profile === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        ${['rigid', 'flat', 'rolled', 'wallpaper'].includes(s.profile) ? `<select class="gya-in" data-s="spec.material">${mats.map(([k, m]) => `<option value="${esc(k)}" ${s.material === k ? 'selected' : ''}>${esc(m.label || k)}</option>`).join('')}</select>` : ''}
+        ${s.profile === 'flatpack' ? `<select class="gya-in" data-s="spec.board">${Object.keys(SH.draft.flatpack.boards).map(k => `<option ${s.board === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select><select class="gya-in" data-s="spec.formula"><option value="rsc" ${s.formula !== 'mailer' ? 'selected' : ''}>Shipping carton</option><option value="mailer" ${s.formula === 'mailer' ? 'selected' : ''}>Mailer box</option></select><input class="gya-in gya-tin" data-s="spec.box" placeholder="L×W×H mm" value="${esc((s.box_mm || []).join('×'))}">` : ''}
+        ${dims.map(f => `<input class="gya-in gya-tin" data-s="spec.${f}" placeholder="${{ length_mm: 'Length mm', width_mm: 'Width mm', height_mm: 'Height mm', wall_w_mm: 'Wall W mm', wall_h_mm: 'Wall H mm' }[f]}" value="${esc(s[f] || '')}">`).join('')}
+        ${s.profile === 'unit' ? `<input class="gya-in gya-tin" data-s="spec.weight_kg" placeholder="kg each" value="${esc(s.weight_kg || '')}"><input class="gya-in gya-tin" data-s="spec.per_package" placeholder="per pkg" value="${esc(s.per_package || '')}">` : ''}
+        <input class="gya-in gya-tin" data-s="qty" type="number" min="1" value="${r.qty}" aria-label="Quantity"><button class="gya-x" data-del-row="${i}">Remove</button></div>`;
+    }
+    const p = SH.products.find(x => x.slug === r.slug) || SH.products[0], opts = SH.options.filter(o => o.product_slug === p.slug);
+    const custom = p.pricing_mode === 'custom_dims' || p.wall_dims;
+    return `<div class="gya-simrow" data-row="${i}"><select class="gya-in" data-s="slug">${SH.products.map(x => `<option value="${esc(x.slug)}" ${x.slug === p.slug ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      ${opts.map(o => `<select class="gya-in" data-s="opt.${esc(o.name)}" title="${esc(o.name)}">${(o.choices || []).map(c => `<option ${r.opts[o.name] === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`).join('')}
+      ${custom ? `<input class="gya-in gya-tin" data-s="cw" placeholder="${p.wall_dims ? 'Wall W' : 'Width'} mm" value="${esc(r.cw || '')}"><input class="gya-in gya-tin" data-s="ch" placeholder="${p.wall_dims ? 'Wall H' : 'Height'} mm" value="${esc(r.ch || '')}">` : ''}
+      <input class="gya-in gya-tin" data-s="qty" type="number" min="1" value="${r.qty}" aria-label="Quantity"><button class="gya-x" data-del-row="${i}">Remove</button></div>`;
+  }
+  function shSimLines() {
+    return SH.sim.rows.map(r => {
+      if (r.type === 'custom') { const s = { ...r.spec };
+        if (s.box) { s.box_mm = String(s.box).split(/[x×*, ]+/).map(Number).filter(Boolean); delete s.box; }
+        if (s.weight_kg) { s.weight_g = Math.round(Number(s.weight_kg) * 1000); delete s.weight_kg; }
+        return { name: 'Custom item', qty: +r.qty || 1, spec: s }; }
+      const p = SH.products.find(x => x.slug === r.slug), opts = { ...r.opts };
+      SH.options.filter(o => o.product_slug === r.slug).forEach(o => { if (!opts[o.name]) opts[o.name] = (o.choices || [])[0]; });
+      if (r.cw && r.ch) opts[p && p.wall_dims ? 'Wall' : 'Custom size'] = `${r.cw} × ${r.ch} mm`;
+      return { slug: r.slug, qty: +r.qty || 1, opts };
+    });
+  }
+  function shSimResult(x) {
+    const w = x.working, view = v => v.ok ? `<b>${$c(v.inc_gst_cents)}</b> <span class="gya-muted">(${$c(v.ex_gst_cents)} + GST ${$c(v.gst_cents)})</span>` : `<span class="gya-warn-t">${esc(v.message)}</span>`;
+    const t = w.totals || {}, pr = SH.draft.pricing || {};
+    return `<section class="gya-card"><h3>Result</h3><dl class="gya-dl">
+        <dt>Zone</dt><dd>${w.zone ? `${esc(w.zone.name)} (${esc(w.zone.state)}, ${esc(w.zone.class)})${w.zone.via === 'override' ? ' via postcode override' : ''}` : '<span class="gya-warn-t">No zone for this postcode</span>'}</dd>
+        <dt>Zone status</dt><dd>${w.zone ? `${w.zone.enabled ? 'Enabled' : 'Disabled'}, ${w.zone.approval === 'approved' ? 'approved' : 'provisional (not approved)'}` : '–'}</dd>
+        <dt>Customer sees here</dt><dd>${view(x.checkout_view)}</dd>
+        <dt>On the live site</dt><dd>${view(x.live_view)}${x.live_reason ? ` <span class="gya-muted gya-small">(${esc(x.live_reason.replace(/_/g, ' '))})</span>` : ''}</dd>
+        ${w.reason && !w.packages ? `<dt>Why</dt><dd>${esc(String(w.reason).replace(/_/g, ' '))}${w.detail ? `: ${esc(w.detail)}` : ''}</dd>` : ''}
+        <dt>Settings</dt><dd>Version ${esc(String(w.config_version))}</dd></dl></section>
+      ${w.packages ? `<section class="gya-card gya-pad0"><h3 style="padding:16px 18px 0">${w.packages.length} package${w.packages.length > 1 ? 's' : ''}</h3><div class="gya-table-wrap"><table class="gya-table gya-small"><thead><tr><th>#</th><th>Contents</th><th>Packed L × W × H</th><th>Weight</th><th>Band</th><th>Base</th><th>Charged</th><th>Width</th><th>Weight</th><th>Packaging cost</th></tr></thead><tbody>
+        ${w.packages.map(p => `<tr><td>${p.n}</td><td>${p.contents.map(c => `${esc(c.name)} × ${c.qty}${c.size_mm ? ` <span class="gya-muted">${c.size_mm.join('×')}</span>` : ''}${c.note ? ` <span class="gya-muted">${esc(c.note)}</span>` : ''}`).join('<br>')}<div class="gya-muted">${esc(p.profile)}${p.shape === 'roll' ? `, roll Ø${p.diameter_mm} mm` : ''}</div></td>
+          <td class="gya-nowrap">${p.length_mm} × ${p.width_mm} × ${p.height_mm}</td><td>${shKg(p.weight_g)}</td><td>${esc(p.band_label || '')}</td><td>${shDollars(p.base)}</td><td>${p.charge_bps / 100}%</td>
+          <td>${shDollars(p.width_surcharge)}${p.width_bps ? ` <span class="gya-muted">(${p.width_bps / 100}%)</span>` : ''}</td><td>${shDollars(p.weight_surcharge)}</td>
+          <td>${shDollars(p.packaging.cost)}<div class="gya-muted">${p.packaging.cardboard_m2} m² card, ${p.packaging.bubble_m2} m² bubble</div></td></tr>`).join('')}</tbody></table></div>
+        <dl class="gya-dl" style="padding:0 18px 16px">
+          <dt>Base freight after additional-package rate</dt><dd>${shDollars(t.base_subtotal)}</dd>
+          <dt>Freight markup ${(pr.freight_markup_bps || 0) / 100}%</dt><dd>${shDollars(t.freight_selling)}</dd>
+          <dt>Width and weight surcharges</dt><dd>${shDollars(t.surcharges)}</dd>
+          <dt>Packaging cost, + ${(pr.packaging_markup_bps || 0) / 100}%</dt><dd>${shDollars(t.packaging_cost)} → ${shDollars(t.packaging_selling)}</dd>
+          <dt>Before minimum</dt><dd>${shDollars(t.before_minimum)}${t.minimum_applied ? ' <span class="gya-muted">(minimum applies)</span>' : ''}</dd>
+          <dt>Delivery ex GST (rounded up)</dt><dd><b>${$c(w.ex_gst_cents)}</b></dd><dt>GST</dt><dd>${$c(w.gst_cents)}</dd><dt>Total inc GST</dt><dd><b>${$c(w.inc_gst_cents)}</b></dd></dl></section>` : ''}`;
+  }
+  function shSimulator() {
+    const dirty = shDirty();
+    return `<section class="gya-card"><p class="gya-muted gya-small" style="margin-top:0">Uses the same calculation as checkout. Try a postcode and a cart to see every package, surcharge and markup.</p>
+        <div class="gya-row" style="margin-bottom:10px">${ui.field('Postcode', `<input class="gya-in gya-tin" id="shSimPc" value="${esc(SH.sim.postcode)}" inputmode="numeric" maxlength="4">`)}
+        ${dirty ? `<label class="gya-check"><input type="checkbox" id="shSimDraft" ${SH.sim.useDraft ? 'checked' : ''}><span>Use my unsaved changes</span></label>` : ''}</div>
+        <div id="shSimRows">${SH.sim.rows.map(shSimRow).join('')}</div>
+        <div class="gya-row" style="margin-top:8px"><button class="gya-btn gya-btn-line gya-btn-sm" id="shAddProd">Add a product</button><button class="gya-btn gya-btn-line gya-btn-sm" id="shAddCustom">Add a custom item</button>
+          <button class="gya-btn gya-btn-red" id="shRun" style="margin-left:auto">Calculate</button></div></section><div id="shSimOut">${SH.sim.last ? shSimResult(SH.sim.last) : ''}</div>`;
+  }
+  // ---- profitability and history
+  function shProfit() {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+    if (!SH.profit.from) { SH.profit.from = today.slice(0, 8) + '01'; SH.profit.to = today; }
+    return `<section class="gya-card"><div class="gya-row">${ui.field('From', `<input class="gya-in" type="date" id="shPfFrom" value="${SH.profit.from}">`)}${ui.field('To', `<input class="gya-in" type="date" id="shPfTo" value="${SH.profit.to}">`)}<button class="gya-btn gya-btn-line" id="shPfGo">Show</button></div>
+      <p class="gya-muted gya-small">Delivery charged (ex GST, after any override) against the actual courier cost and adjustments recorded on each order. Add courier costs on the order page.</p></section><div id="shPfOut"></div>`;
+  }
+  function shHistory() {
+    return `<section class="gya-card gya-pad0"><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Version</th><th>Saved</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>
+      ${(SH.cur.versions || []).map(v => `<tr><td>${v.version}${v.version === SH.cur.version ? ' <span class="gya-muted gya-small">in use</span>' : ''}</td><td>${dtt(v.created_at)}</td><td>${esc(String(v.created_by).replace('admin:', ''))}</td><td>${esc(v.note || '')}</td>
+        <td>${v.version !== SH.cur.version ? `<button class="gya-btn gya-btn-line gya-btn-sm" data-restore="${v.version}">Load into editor</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="5">${empty('No saved versions yet.')}</td></tr>`}</tbody></table></div>
+      <p class="gya-muted gya-small" style="padding:0 18px 14px">Versions are never changed or deleted. Loading an old version puts it in the editor; saving it creates a new version. Orders always keep the version they were charged with.</p></section>`;
+  }
+
+  G.section({ id: 'shipping', label: 'Shipping', order: 31, async render(main) {
+    if (window.GYA_DEMO) { main.innerHTML = head('Shipping', 'Standard Delivery is worked out from the cart and the postcode.') + '<p class="gya-note">The shipping calculator runs on the shop server, so it is not part of this demo. On the live dashboard this page has the delivery zones, freight rates, packing settings, a simulator and a profitability report.</p>'; return; }
+    const reload = async () => { SH.cur = await server('shipping-get', {}); SH.draft = structuredClone(SH.cur.config); SH.validation = SH.cur.validation; SH.open = null; };
+    if (!SH.cur) await reload();
+    const tabs = [['zones', 'Zones'], ['pricing', 'Freight pricing'], ['products', 'Products and packaging'], ['simulator', 'Simulator'], ['profit', 'Profitability'], ['history', 'History']];
+    const draw = async () => {
+      if (SH.tab === 'simulator') { await shLoadProducts(); if (!SH.sim.rows.length) SH.sim.rows = [{ type: 'product', slug: (SH.products.find(p => p.slug === 'foamboard') || SH.products[0]).slug, opts: {}, qty: 1 }]; }
+      main.innerHTML = head('Shipping', 'Standard Delivery is worked out from the cart and the postcode. Rates, zones and packing settings are saved as versions.') + shBar()
+        + `<nav class="gya-tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${SH.tab === k ? 'on' : ''}">${l}</button>`).join('')}</nav>`
+        + `<div id="shBody">${{ zones: shZones, pricing: shPricing, products: shProducts, simulator: shSimulator, profit: shProfit, history: shHistory }[SH.tab]()}</div>`;
+      wire();
+    };
+    const redrawBar = () => { const bar = qs('.gya-shipbar', main); if (bar) { bar.outerHTML = shBar(); wireBar(); } if (shDirty()) G.markDirty(); else G.markClean(); };
+    let vT; const validateSoon = () => { clearTimeout(vT); vT = setTimeout(async () => { try { SH.validation = await server('shipping-validate', { config: SH.draft }); const box = qs('#shCheck', main); if (box) box.innerHTML = shValidationHtml(SH.validation); } catch (e) {} }, 600); };
+    const wireBar = () => {
+      const s = qs('#shSave', main); if (s) s.onclick = e => busy(e.currentTarget, async () => {
+        const r = await server('shipping-save', { config: SH.draft, note: qs('#shNote', main).value.trim(), expect_version: SH.cur.version });
+        toast(`Shipping settings saved as version ${r.version}`); G.markClean(); await reload(); SH.validation = r.validation; draw(); });
+      const dsc = qs('#shDiscard', main); if (dsc) dsc.onclick = () => { if (!confirm('Discard your unsaved shipping changes?')) return; SH.draft = structuredClone(SH.cur.config); SH.validation = SH.cur.validation; G.markClean(); draw(); };
+    };
+    const wire = () => {
+      wireBar();
+      qsa('[data-tab]', main).forEach(b => b.onclick = () => { SH.tab = b.dataset.tab; draw(); });
+      const body = qs('#shBody', main);
+      body.oninput = body.onchange = e => {
+        const el = e.target.closest('[data-p]'); if (!el) return;
+        let kind = el.dataset.k, v;
+        if (kind === 'textnull') v = el.value || undefined; else v = shFrom(kind, el);
+        if (Number.isNaN(v)) { el.classList.add('gya-bad'); return; }
+        el.classList.remove('gya-bad');
+        if (v === undefined) { const ks = el.dataset.p.split('.'); const parent = shGet(SH.draft, ks.slice(0, -1).join('.')); if (parent) delete parent[ks[ks.length - 1]]; }
+        else shSet(SH.draft, el.dataset.p, v);
+        redrawBar(); validateSoon();
+      };
+      body.onclick = e => {
+        const t = e.target.closest('button'); if (!t) return;
+        if (t.dataset.zone != null) { SH.open = SH.open === +t.dataset.zone ? null : +t.dataset.zone; draw(); return; }
+        if (t.dataset.delZone != null) { const z = SH.draft.zones[+t.dataset.delZone]; if (!confirm(`Delete the zone "${z.name}"? Its postcodes will show "unavailable" unless another zone covers them.`)) return; SH.draft.zones.splice(+t.dataset.delZone, 1); SH.open = null; redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shAddZone') { const src = SH.draft.zones[0] || {}; SH.draft.zones.push({ id: 'zone-' + Date.now().toString(36), name: 'New zone', state: 'NSW', class: 'regional', subzone: null, ranges: [], enabled: false, approval: { status: 'provisional', by: null, at: null }, rates: { small: null, medium: null, large: null, os1: null, os2: null }, width_tiers: structuredClone(src.width_tiers || []), weight_tiers: structuredClone(src.weight_tiers || []), feasibility: null }); SH.open = SH.draft.zones.length - 1; redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shAddOv') { (SH.draft.postcode_overrides = SH.draft.postcode_overrides || []).push({ postcode: '', zone_id: (SH.draft.zones[0] || {}).id, note: '' }); redrawBar(); draw(); return; }
+        if (t.dataset.delOv != null) { SH.draft.postcode_overrides.splice(+t.dataset.delOv, 1); redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shAddMat') { const name = qs('#shNewMat', main).value.trim(); if (!name) return; const key = G.slugify(name).replace(/-/g, '_'); if (SH.draft.materials[key]) { toast('That material already exists', true); return; } SH.draft.materials[key] = { label: name, thickness_mm: 1, g_m2: 500 }; redrawBar(); validateSoon(); draw(); return; }
+        if (t.dataset.delMat) { if (!confirm('Remove this material?')) return; delete SH.draft.materials[t.dataset.delMat]; redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shAddRule') { SH.draft.material_rules.push({ match: [], material: Object.keys(SH.draft.materials)[0] }); redrawBar(); draw(); return; }
+        if (t.dataset.delRule != null) { SH.draft.material_rules.splice(+t.dataset.delRule, 1); redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shAddUnit') { const name = qs('#shNewUnit', main).value.trim(); if (!name) return; const key = G.slugify(name); if (SH.draft.units[key]) { toast('That parcel already exists', true); return; } SH.draft.units[key] = { label: name, length_mm: 500, width_mm: 300, height_mm: 100, weight_g: 1000, per_package: 1 }; redrawBar(); validateSoon(); draw(); return; }
+        if (t.dataset.delUnit) { if (!confirm('Remove this parcel?')) return; delete SH.draft.units[t.dataset.delUnit]; redrawBar(); validateSoon(); draw(); return; }
+        if (t.id === 'shLook') { const pc = qs('#shLookPc', main).value.trim(); busy(t, async () => { const r = await server('shipping-lookup', { postcode: pc }); const z = r.zone;
+          qs('#shLookOut', main).innerHTML = z ? `${esc(pc)} is in <b>${esc(z.name)}</b> (${esc(z.state)}, ${esc(z.class)}${z.via === 'override' ? ', by override' : ''}): ${z.enabled ? 'enabled' : 'disabled'}, ${z.approval && z.approval.status === 'approved' ? 'approved' : 'not approved yet'}. <span class="gya-muted">(Saved settings.)</span>`
+            : `<span class="gya-warn-t">${esc(pc)}: ${{ invalid_postcode: 'not a valid postcode', unknown_postcode: 'no zone covers this postcode', ambiguous_postcode: 'two zones cover it equally, so it is unavailable' }[r.reason] || esc(r.reason)}.</span>`; }); return; }
+        if (t.dataset.restore) { busy(t, async () => { const v = await server('shipping-version', { version: +t.dataset.restore }); SH.draft = structuredClone(v.config); SH.tab = 'zones'; toast(`Version ${v.version} loaded. Save to make it the version in use.`); draw(); validateSoon(); }); return; }
+        // simulator
+        if (t.id === 'shAddProd') { SH.sim.rows.push({ type: 'product', slug: SH.products[0].slug, opts: {}, qty: 1 }); draw(); return; }
+        if (t.id === 'shAddCustom') { SH.sim.rows.push({ type: 'custom', spec: { profile: 'rigid', material: Object.keys(SH.draft.materials)[0], length_mm: 600, width_mm: 400 }, qty: 1 }); draw(); return; }
+        if (t.dataset.delRow != null) { SH.sim.rows.splice(+t.dataset.delRow, 1); draw(); return; }
+        if (t.id === 'shRun') { busy(t, async () => { SH.sim.postcode = qs('#shSimPc', main).value.trim(); const dr = qs('#shSimDraft', main); if (dr) SH.sim.useDraft = dr.checked;
+          SH.sim.last = await server('shipping-simulate', { postcode: SH.sim.postcode, lines: shSimLines(), config: SH.sim.useDraft && shDirty() ? SH.draft : undefined });
+          qs('#shSimOut', main).innerHTML = shSimResult(SH.sim.last); }); return; }
+        if (t.id === 'shPfGo') { SH.profit.from = qs('#shPfFrom', main).value; SH.profit.to = qs('#shPfTo', main).value; busy(t, async () => { const r = await server('shipping-profit', { from: SH.profit.from, to: SH.profit.to }); const tt = r.totals;
+          qs('#shPfOut', main).innerHTML = `<div class="gya-stats gya-stats-3">${card('Orders', tt.orders, `${tt.with_cost} with a courier cost`)}${card('Delivery charged', $c(tt.charged_cents), 'ex GST, orders with a cost')}${card('Margin', $c(tt.margin_cents), `courier cost ${$c(tt.actual_cents)}`)}</div>
+            <section class="gya-card gya-pad0"><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Paid</th><th>Zone</th><th>Calculated</th><th>Charged</th><th>Courier</th><th>Adjustments</th><th>Margin</th></tr></thead><tbody>
+            ${r.rows.map(x => `<tr><td><a class="gya-link" href="#/admin/orders/${x.id}">${esc(x.number)}</a><div class="gya-muted gya-small">${esc(x.name || '')}</div></td><td>${dt(x.paid_at)}</td><td>${esc(x.zone || '–')}</td><td>${x.calculated_ex_gst_cents == null ? '–' : $c(x.calculated_ex_gst_cents)}</td><td>${x.charged_ex_gst_cents == null ? '–' : $c(x.charged_ex_gst_cents)}${x.overridden ? ' <span class="gya-muted gya-small">override</span>' : ''}</td><td>${x.courier_cost_cents == null ? '<span class="gya-muted">not entered</span>' : $c(x.courier_cost_cents)}</td><td>${x.adjustments_cents ? $c(x.adjustments_cents) : '–'}</td><td>${x.margin_cents == null ? '–' : `<b class="${x.margin_cents < 0 ? 'gya-warn-t' : ''}">${$c(x.margin_cents)}</b>`}</td></tr>`).join('') || `<tr><td colspan="8">${empty('No paid orders in this range.')}</td></tr>`}</tbody></table></div></section>`; }); return; }
+      };
+      // simulator row edits (kept in SH.sim, not the settings)
+      const rows = qs('#shSimRows', main);
+      if (rows) rows.onchange = rows.oninput = e => { const el = e.target.closest('[data-s]'); if (!el) return; const r = SH.sim.rows[+el.closest('[data-row]').dataset.row], k = el.dataset.s;
+        if (k === 'qty') r.qty = el.value; else if (k === 'slug') { r.slug = el.value; r.opts = {}; r.cw = r.ch = ''; if (e.type === 'change') draw(); }
+        else if (k.startsWith('opt.')) r.opts[k.slice(4)] = el.value; else if (k === 'cw' || k === 'ch') r[k] = el.value;
+        else if (k === 'spec.profile') { r.spec = { profile: el.value, material: Object.keys(SH.draft.materials)[0], board: Object.keys(SH.draft.flatpack.boards)[0], formula: 'rsc' }; if (e.type === 'change') draw(); }
+        else if (k.startsWith('spec.')) r.spec[k.slice(5)] = el.value; };
+    };
+    await draw();
+  } });
+
+  // Shipping card on the order page: the saved calculation, overrides and courier costs
+  async function shOrderCard(o) {
+    if (!o.shipping_quote && o.shipping_ex_gst_cents == null) return '';
+    let ovs = [], costs = [];
+    try { [ovs, costs] = await Promise.all([rest(`shipping_overrides?select=*&order_id=eq.${enc(o.id)}&order=created_at`), rest(`courier_costs?select=*&order_id=eq.${enc(o.id)}&order=created_at`)]); } catch (e) {}
+    const q = o.shipping_quote || {}, charged = o.shipping_override_ex_gst_cents != null ? o.shipping_override_ex_gst_cents : o.shipping_ex_gst_cents;
+    const last = costs.filter(c => c.kind === 'cost').pop(), adj = costs.filter(c => c.kind === 'adjustment').reduce((t, c) => t + c.amount_cents, 0);
+    return `<section class="gya-card" id="odShip"><h3>Shipping</h3><dl class="gya-dl">
+        <dt>Zone</dt><dd>${esc(o.shipping_zone || '–')} · ${esc(o.shipping_postcode || '')}</dd><dt>Settings</dt><dd>Version ${esc(String(o.shipping_config_version ?? '–'))}</dd>
+        <dt>Calculated</dt><dd>${$c(o.shipping_ex_gst_cents)} ex GST${q.packages ? ` · ${q.packages.length} package${q.packages.length > 1 ? 's' : ''}` : ''}</dd>
+        ${o.shipping_override_ex_gst_cents != null ? `<dt>Overridden to</dt><dd><b>${$c(o.shipping_override_ex_gst_cents)}</b> ex GST</dd>` : ''}
+        <dt>Courier cost</dt><dd>${last ? `${$c(last.amount_cents)}${last.carrier ? ` (${esc(last.carrier)})` : ''}${adj ? `, adjustments ${$c(adj)}` : ''} · margin <b>${$c(charged - last.amount_cents - adj)}</b>` : '<span class="gya-muted">not entered</span>'}</dd></dl>
+      ${q.packages ? `<details><summary class="gya-small">How it was calculated</summary><table class="gya-table gya-small"><thead><tr><th>#</th><th>Contents</th><th>Packed</th><th>kg</th><th>Base</th><th>Rate</th></tr></thead><tbody>${q.packages.map(p => `<tr><td>${p.n}</td><td>${p.contents.map(c => `${esc(c.name)} × ${c.qty}`).join(', ')}</td><td class="gya-nowrap">${p.length_mm}×${p.width_mm}×${p.height_mm}</td><td>${(p.weight_g / 1000).toFixed(2)}</td><td>${shDollars(p.base)}</td><td>${p.charge_bps / 100}%</td></tr>`).join('')}</tbody></table>
+        <p class="gya-small gya-muted">Freight ${shDollars(q.totals.freight_selling)} + surcharges ${shDollars(q.totals.surcharges)} + packaging ${shDollars(q.totals.packaging_selling)} = ${shDollars(q.totals.before_minimum)}, charged ${$c(q.ex_gst_cents)} ex GST.</p></details>` : ''}
+      ${ovs.length ? `<details><summary class="gya-small">${ovs.length} override${ovs.length > 1 ? 's' : ''}</summary><ul class="gya-mini">${ovs.map(v => `<li>${$c(v.original_ex_gst_cents)} → <b>${$c(v.new_ex_gst_cents)}</b> · ${esc(v.reason)} <span class="gya-muted">${esc(String(v.actor).replace('admin:', ''))}, ${dtt(v.created_at)}</span></li>`).join('')}</ul></details>` : ''}
+      <details><summary class="gya-small">Override the delivery charge</summary><div class="gya-row" style="margin-top:8px"><input class="gya-in gya-tin" id="odShAmt" placeholder="$ ex GST" inputmode="decimal"><input class="gya-in" id="odShWhy" placeholder="Reason"><button class="gya-btn gya-btn-line gya-btn-sm" id="odShOv">Save override</button></div>
+        <p class="gya-muted gya-small">Records the new amount for reporting. It doesn't charge or refund the customer; do that in Stripe or PayPal. The original calculation is kept.</p></details>
+      <details><summary class="gya-small">Record courier cost</summary><div class="gya-row" style="margin-top:8px"><select class="gya-in" id="odShKind" style="width:auto"><option value="cost">Courier cost</option><option value="adjustment">Adjustment</option></select><input class="gya-in gya-tin" id="odShCost" placeholder="$ ex GST" inputmode="decimal"><input class="gya-in gya-tin" id="odShCarrier" placeholder="Courier"><input class="gya-in" id="odShNote" placeholder="Note"><button class="gya-btn gya-btn-line gya-btn-sm" id="odShCostBtn">Save</button></div></details></section>`;
+  }
+  function shOrderWire(main, o, refresh) {
+    const ov = qs('#odShOv', main); if (ov) ov.onclick = e => busy(e.currentTarget, async () => {
+      const amt = Math.round(Number(qs('#odShAmt', main).value) * 100); if (!(amt >= 0) || qs('#odShAmt', main).value.trim() === '') throw new Error('Enter the new amount, ex GST.');
+      await server('shipping-override', { order_id: o.id, new_ex_gst_cents: amt, reason: qs('#odShWhy', main).value.trim() }); toast('Delivery charge overridden'); refresh(); });
+    const cb = qs('#odShCostBtn', main); if (cb) cb.onclick = e => busy(e.currentTarget, async () => {
+      const amt = Math.round(Number(qs('#odShCost', main).value) * 100); if (!Number.isFinite(amt) || qs('#odShCost', main).value.trim() === '') throw new Error('Enter the amount, ex GST.');
+      await server('shipping-courier', { order_id: o.id, kind: qs('#odShKind', main).value, amount_cents: amt, carrier: qs('#odShCarrier', main).value.trim(), note: qs('#odShNote', main).value.trim() }); toast('Saved'); refresh(); });
+  }
 
   /* ---------------- Analytics ----------------
      Figures come from the database in one call (admin_order_analytics), grouped by the date each

@@ -38,3 +38,10 @@ test('the shipping calculator gets the same size', () => {
   const o = shippingOptions(product('posters-custom', { pricing_mode: 'custom_dims' }), { 'Custom size': '841 × 1189 mm' });
   assert.equal(o['Custom size'], '841 × 1189 mm');
 });
+
+test('a product the storefront treats as custom size is priced the same way on the server, whatever its pricing mode', () => {
+  // e.g. custom size ticked in the dashboard together with price breaks: the page shows width x height x rate,
+  // so the server must charge that too (never the flat tier price)
+  const p = product('corflute-signs-custom-dimensions', { pricing_mode: 'tiered', tiers: [{ min_qty: 1, unit_price: 32 }] });
+  assert.equal(unitCents(p, 1, { 'Custom size': '1200 × 2400 mm' }), 9216);
+});

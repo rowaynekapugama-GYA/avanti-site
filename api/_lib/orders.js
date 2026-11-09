@@ -46,16 +46,21 @@ export function shippingOptions(p, opts) {
   for (const [name, choices] of Object.entries(p.choices || {})) if (opts[name] != null && choices.includes(String(opts[name]))) out[name] = String(opts[name]);
   for (const k of p.variation_keys || []) if (opts[k] != null && p.variations.length) out[k] = String(opts[k]);   // already matched to a variation by unitCents
   if (p.wall_dims) { const wh = parseWH(opts.Wall); if (wh) out.Wall = `${Math.ceil(wh[0])} × ${Math.ceil(wh[1])} mm`; }
-  if (p.pricing_mode === 'custom_dims') { const wh = parseWH(opts['Custom size']); if (wh) out['Custom size'] = `${Math.ceil(wh[0])} × ${Math.ceil(wh[1])} mm`; }
+  if (isCustomSize(p)) { const wh = parseWH(opts['Custom size']); if (wh) out['Custom size'] = `${Math.ceil(wh[0])} × ${Math.ceil(wh[1])} mm`; }
   return out;
 }
 // Custom-size products: the size must be there and within the product's maximum (also checked in the browser)
+const isCustomSize = p => p.dims_config != null && !p.wall_dims;   // storefront: p.cdims (= dims_config)
 function checkCustomSize(p, opts) {
-  if (p.pricing_mode !== 'custom_dims') return;
+  if (!isCustomSize(p)) return;
   const wh = parseWH(opts['Custom size']), mx = p.dims_config || {};
   if (!wh) throw new HttpError(400, `Please enter the width and height in millimetres for ${p.name}.`);
   if (wh[0] < 50 || wh[1] < 50) throw new HttpError(400, `The smallest size for ${p.name} is 50 × 50 mm.`);
-  if ((mx.maxW && wh[0] > mx.maxW) || (mx.maxH && wh[1] > mx.maxH)) throw new HttpError(400, `The maximum size for ${p.name} is ${mx.maxW} × ${mx.maxH} mm.`);
+  // the same sheet either way round: 2400 wide x 1200 high fits a 1200 x 2400 limit (same rule as cdimsCheck in the storefront)
+  if (mx.maxW && mx.maxH) {
+    const lo = Math.min(mx.maxW, mx.maxH), hi = Math.max(mx.maxW, mx.maxH);
+    if (Math.max(...wh) > hi || Math.min(...wh) > lo) throw new HttpError(400, `The maximum size for ${p.name} is ${lo} × ${hi} mm (either way round).`);
+  } else if ((mx.maxW && wh[0] > mx.maxW) || (mx.maxH && wh[1] > mx.maxH)) throw new HttpError(400, `The maximum ${mx.maxW ? 'width' : 'height'} for ${p.name} is ${mx.maxW || mx.maxH} mm.`);
 }
 
 // Same rules as unitPrice() in the storefront (checked by the parity test for every combination).
@@ -75,7 +80,7 @@ export function unitCents(p, qty, opts = {}) {
   }
   // Custom-size products: base price is the rate per m² (Avanti's price list), so price = width × height × rate.
   // Same rule as unitPrice() in the storefront.
-  if (p.pricing_mode === 'custom_dims') {
+  if (isCustomSize(p)) {
     const m = parseWH(opts['Custom size']);
     if (!m) throw new HttpError(400, `Please enter the width and height in millimetres for ${p.name}.`);
     return cents(Math.round((m[0] * m[1]) / 1e6 * p.base_price * 100) / 100);

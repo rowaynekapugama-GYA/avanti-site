@@ -4185,7 +4185,10 @@ const CDIM_MIN=50;
 function cdimsCheck(p, w, h){
   if(!(w>0&&h>0)) return 'Enter your width and height in mm';
   if(w<CDIM_MIN||h<CDIM_MIN) return `The smallest size is ${CDIM_MIN} × ${CDIM_MIN} mm`;
-  const c=p.cdims||{}; if((c.maxW&&w>c.maxW)||(c.maxH&&h>c.maxH)) return `The largest size is ${c.maxW||'any'} × ${c.maxH||'any'} mm (width × height)`;
+  const c=p.cdims||{};
+  if(c.maxW&&c.maxH){ const lo=Math.min(c.maxW,c.maxH), hi=Math.max(c.maxW,c.maxH);
+    if(Math.max(w,h)>hi||Math.min(w,h)>lo) return `The largest size is ${lo} × ${hi} mm (either way round)`; }
+  else if((c.maxW&&w>c.maxW)||(c.maxH&&h>c.maxH)) return c.maxW?`The largest width is ${c.maxW} mm`:`The largest height is ${c.maxH} mm`;
   return '';
 }
 function customM2(opts){ const m=opts&&String(opts['Custom size']||'').match(/^\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[×xX*]\s*(\d+(?:\.\d+)?)/); return m? (+m[1]*+m[2])/1e6 : 0; }
@@ -4469,7 +4472,7 @@ function pageProduct(slug){
         <p class="short">${esc(p.d)}</p>
         ${p.tiers?`<div class="tiers" id="tiers"><div class="row"><span>Quantity</span><span>Each</span><span>Save</span></div>${p.tiers.map(([min,price],i)=>{ const next=p.tiers[i+1]; const label = next? (min===next[0]-1?`${min}`:`${min}–${next[0]-1}`) : `${min}+`; const save=Math.round((1-price/p.p)*100); return `<div class="row" data-min="${min}"><span>${label}</span><span>${money(price)}</span><span class="save">${save?save+'%':'-'}</span></div>`}).join('')}</div>`:''}
         ${p.dims?`<div class="opt"><label>Wall width <span>mm</span></label><input id="dimW" type="number" min="707" placeholder="e.g. 3000" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="opt"><label>Wall height <span>mm</span></label><input id="dimH" type="number" min="707" placeholder="e.g. 2400" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="tpl-links" style="margin:2px 0 6px"><a href="#/product/wallpaper-sample?design=${p.s}">Order a sample · $10, posted in both finishes</a><a href="mailto:info@avantiprint.com.au?subject=${encodeURIComponent('Wallpaper installation enquiry: '+p.n)}">Installation enquiry</a></div>`:''}
-        ${p.cdims?`<div class="opt-row"><div class="opt"><label>Width <span>mm${p.cdims.maxW?` · max ${p.cdims.maxW}`:''}</span></label><input id="cdW" type="number" min="50" ${p.cdims.maxW?`max="${p.cdims.maxW}"`:''} placeholder="e.g. 600" class="dim-in" inputmode="numeric"></div><div class="opt"><label>Height <span>mm${p.cdims.maxH?` · max ${p.cdims.maxH}`:''}</span></label><input id="cdH" type="number" min="50" ${p.cdims.maxH?`max="${p.cdims.maxH}"`:''} placeholder="e.g. 900" class="dim-in" inputmode="numeric"></div></div><p class="cd-msg" id="cdMsg" role="status" aria-live="polite"></p>`:''}
+        ${p.cdims?`<div class="opt-row"><div class="opt"><label>Width <span>mm${p.cdims.maxW&&p.cdims.maxH?` · up to ${Math.min(p.cdims.maxW,p.cdims.maxH)} × ${Math.max(p.cdims.maxW,p.cdims.maxH)} either way`:p.cdims.maxW?` · max ${p.cdims.maxW}`:''}</span></label><input id="cdW" type="number" min="50" ${p.cdims.maxW&&p.cdims.maxH?`max="${Math.max(p.cdims.maxW,p.cdims.maxH)}"`:p.cdims.maxW?`max="${p.cdims.maxW}"`:''} placeholder="e.g. 600" class="dim-in" inputmode="numeric"></div><div class="opt"><label>Height <span>mm${p.cdims.maxW&&p.cdims.maxH?'':p.cdims.maxH?` · max ${p.cdims.maxH}`:''}</span></label><input id="cdH" type="number" min="50" ${p.cdims.maxW&&p.cdims.maxH?`max="${Math.max(p.cdims.maxW,p.cdims.maxH)}"`:p.cdims.maxH?`max="${p.cdims.maxH}"`:''} placeholder="e.g. 900" class="dim-in" inputmode="numeric"></div></div><p class="cd-msg" id="cdMsg" role="status" aria-live="polite"></p>`:''}
         ${p.opts?Object.entries(p.opts).map(([k,v])=>(k==='Colour'&&p.swatches)? swatchHTML(k,v,p.swatches) : `<div class="opt"><label>${k}${isPack?'<span>price varies by size</span>':''}</label><select data-opt="${esc(k)}"><option value="">Choose ${k.toLowerCase()}</option>${v.map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`).join(''):''}
         ${p.fields?fieldsHTML(p):''}
         ${(!p.sold&&studioCfg(p))?artPanelHTML(p):''}
@@ -4764,7 +4767,8 @@ function wireProduct(){
     let cdErr='', cdTxt='';
     if(p.cdims){ const w=+$('#cdW').value||0, h=+$('#cdH').value||0, msg=$('#cdMsg'), cp=$('#cdPrice'), cn=$('#cdPriceNote');
       cdErr = (w||h) ? cdimsCheck(p,w,h) : 'Enter your width and height in mm';
-      if(msg){ msg.textContent = (w||h) ? cdErr : ''; msg.classList.toggle('bad', !!(w||h) && !!cdErr); }
+      const typing=[document.getElementById('cdW'),document.getElementById('cdH')].includes(document.activeElement) && /smallest/.test(cdErr);
+      if(msg){ msg.textContent = (w||h)&&!typing ? cdErr : ''; msg.classList.toggle('bad', !!(w||h) && !!cdErr && !typing); }
       if(!cdErr){ const m2=(w*h)/1e6, each=unitPrice(p,q,{'Custom size':`${w} × ${h} mm`});
         if(cp) cp.textContent=money(each); if(cn) cn.textContent=`each · ${w} × ${h} mm`;
         cdTxt=`${w} × ${h} mm = ${(Math.round(m2*10000)/10000).toLocaleString('en-AU',{maximumFractionDigits:4})} m² × ${money(p.p)} per m² = ${money(each)} each<br>${q} × ${money(each)} = <b>${money(each*q)}</b>`; }
@@ -4780,7 +4784,7 @@ function wireProduct(){
     if(p.cdims){ sub.innerHTML = cdTxt || `${money(p.p)} per m², enter your width and height for the exact price`; return; }
     sub.innerHTML = p.dims && extra ? `${money(u)} per m²${extra}` : `${q} × ${money(u)} = <b>${money(u*q)}</b>${p.pmax&&!exact?' <span style="color:var(--ink-3)">(from price, choose all options for your exact price)</span>':''}`; }
   $('#qm').onclick=()=>{qty.value=Math.max(1,+qty.value-1);upd()}; $('#qp').onclick=()=>{qty.value=+qty.value+1;upd()}; qty.oninput=upd;
-  $$('#dimW,#dimH,#cdW,#cdH').forEach(i=>i&&i.addEventListener('input',upd));
+  $$('#dimW,#dimH,#cdW,#cdH').forEach(i=>i&&i.addEventListener('input',upd)); $$('#cdW,#cdH').forEach(i=>i&&i.addEventListener('blur',()=>setTimeout(()=>{ if(i.isConnected) upd(); },0)));
   $$('[data-opt]').forEach(s=>s.addEventListener('change',upd));
   $$('.sw').forEach(b=>b.onclick=()=>{ const sel=b.closest('.sw-opt').querySelector('select'); sel.value=b.dataset.sw;
     $$('.sw').forEach(x=>x.classList.toggle('on',x===b)); b.setAttribute('aria-checked','true');

@@ -1347,6 +1347,7 @@ h1 .gya-st { font-size: .8rem; margin-left: 8px; }
 .gya-media-item b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gya-links { margin: 0; padding-left: 18px; line-height: 2; }
 .gya-tin { width: 92px; }
+.cd-msg { margin: -4px 0 10px; font-size: .84rem; color: var(--ink-3); min-height: 0; } .cd-msg:empty { display: none; } .cd-msg.bad { color: var(--red); font-weight: 600; }
 .gya-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 16px; align-items: start; }
 @media (max-width: 800px) { .gya-grid3 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 520px) { .gya-grid3 { grid-template-columns: 1fr; } }
@@ -4166,6 +4167,7 @@ function priceLabel(p){
   if(p.sold) return `<span class="price"><small>Sold out</small></span>`;
   if(p.tiers){ const lo = p.tiers[p.tiers.length-1][1]; return `<span class="price"><small>from</small>${money(lo)}<small> · $${p.p} single</small></span>`; }
   if(p.pmax) return `<span class="price">${money(p.p)} – ${money(p.pmax)}</span>`;
+  if(p.cdims) return `<span class="price">${money(p.p)}<small> per m²</small></span>`;
   return `<span class="price">${money(p.p)}${p.unit?`<small> ${p.unit}</small>`:''}</span>`;
 }
 /* Exact price for a full option selection.
@@ -4177,9 +4179,20 @@ function varPrice(p, opts){
   return t.v[t.k.map(k=>opts[k]).join('|')];
 }
 function wallM2(opts){ const m=opts&&opts['Wall']&&opts['Wall'].match(/(\d+)\D+(\d+)/); return m? Math.max(0.5,(+m[1]*+m[2])/1e6) : 0; }
+/* Custom-size products ("Custom Dimensions"): the base price is the rate per m², as in Avanti's price list,
+   so each sign costs width × height (in m²) × rate. Same rule as unitCents() on the server. */
+const CDIM_MIN=50;
+function cdimsCheck(p, w, h){
+  if(!(w>0&&h>0)) return 'Enter your width and height in mm';
+  if(w<CDIM_MIN||h<CDIM_MIN) return `The smallest size is ${CDIM_MIN} × ${CDIM_MIN} mm`;
+  const c=p.cdims||{}; if((c.maxW&&w>c.maxW)||(c.maxH&&h>c.maxH)) return `The largest size is ${c.maxW||'any'} × ${c.maxH||'any'} mm (width × height)`;
+  return '';
+}
+function customM2(opts){ const m=opts&&String(opts['Custom size']||'').match(/^\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[×xX*]\s*(\d+(?:\.\d+)?)/); return m? (+m[1]*+m[2])/1e6 : 0; }
 function unitPrice(p, qty, opts){
   const v = varPrice(p, opts); if(typeof v==='number') return v;
   if(p.dims){ const m2=wallM2(opts); if(m2) return Math.round(m2*p.p*100)/100; }
+  if(p.cdims){ const m2=customM2(opts); if(m2) return Math.round(m2*p.p*100)/100; }
   if(!p.tiers) return p.p;
   let u = p.tiers[0][1];
   p.tiers.forEach(([min,price])=>{ if(qty>=min) u=price; });
@@ -4452,11 +4465,11 @@ function pageProduct(slug){
       <div class="buy">
         <span class="eyebrow">${c.n}${p.tags&&p.tags.includes('best')?' · Best seller':''}</span>
         <h1>${esc(p.n)}</h1>
-        <div class="price" id="priceBox">${p.sold?`<span>Sold out</span>`: p.tiers?`<span id="unitP">${money(p.p)}</span><small>each · from ${money(p.tiers.at(-1)[1])} at ${p.tiers.at(-1)[0]}+</small>`: p.pmax?`<span>${money(p.p)} – ${money(p.pmax)}</span><small>depends on size &amp; options</small>`:`<span>${money(p.p)}</span>${p.unit?`<small>${p.unit} · min 0.5 m²</small>`:''}`}</div>
+        <div class="price" id="priceBox">${p.sold?`<span>Sold out</span>`: p.tiers?`<span id="unitP">${money(p.p)}</span><small>each · from ${money(p.tiers.at(-1)[1])} at ${p.tiers.at(-1)[0]}+</small>`: p.pmax?`<span>${money(p.p)} – ${money(p.pmax)}</span><small>depends on size &amp; options</small>`:p.cdims?`<span id="cdPrice">${money(p.p)}</span><small id="cdPriceNote">per m² · enter your size for the exact price</small>`:`<span>${money(p.p)}</span>${p.unit?`<small>${p.unit} · min 0.5 m²</small>`:''}`}</div>
         <p class="short">${esc(p.d)}</p>
         ${p.tiers?`<div class="tiers" id="tiers"><div class="row"><span>Quantity</span><span>Each</span><span>Save</span></div>${p.tiers.map(([min,price],i)=>{ const next=p.tiers[i+1]; const label = next? (min===next[0]-1?`${min}`:`${min}–${next[0]-1}`) : `${min}+`; const save=Math.round((1-price/p.p)*100); return `<div class="row" data-min="${min}"><span>${label}</span><span>${money(price)}</span><span class="save">${save?save+'%':'-'}</span></div>`}).join('')}</div>`:''}
         ${p.dims?`<div class="opt"><label>Wall width <span>mm</span></label><input id="dimW" type="number" min="707" placeholder="e.g. 3000" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="opt"><label>Wall height <span>mm</span></label><input id="dimH" type="number" min="707" placeholder="e.g. 2400" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="tpl-links" style="margin:2px 0 6px"><a href="#/product/wallpaper-sample?design=${p.s}">Order a sample · $10, posted in both finishes</a><a href="mailto:info@avantiprint.com.au?subject=${encodeURIComponent('Wallpaper installation enquiry: '+p.n)}">Installation enquiry</a></div>`:''}
-        ${p.cdims?`<div class="opt-row"><div class="opt"><label>Width <span>mm${p.cdims.maxW?` · max ${p.cdims.maxW}`:''}</span></label><input id="cdW" type="number" min="50" ${p.cdims.maxW?`max="${p.cdims.maxW}"`:''} placeholder="e.g. 600" class="dim-in"></div><div class="opt"><label>Height <span>mm${p.cdims.maxH?` · max ${p.cdims.maxH}`:''}</span></label><input id="cdH" type="number" min="50" ${p.cdims.maxH?`max="${p.cdims.maxH}"`:''} placeholder="e.g. 900" class="dim-in"></div></div>`:''}
+        ${p.cdims?`<div class="opt-row"><div class="opt"><label>Width <span>mm${p.cdims.maxW?` · max ${p.cdims.maxW}`:''}</span></label><input id="cdW" type="number" min="50" ${p.cdims.maxW?`max="${p.cdims.maxW}"`:''} placeholder="e.g. 600" class="dim-in" inputmode="numeric"></div><div class="opt"><label>Height <span>mm${p.cdims.maxH?` · max ${p.cdims.maxH}`:''}</span></label><input id="cdH" type="number" min="50" ${p.cdims.maxH?`max="${p.cdims.maxH}"`:''} placeholder="e.g. 900" class="dim-in" inputmode="numeric"></div></div><p class="cd-msg" id="cdMsg" role="status" aria-live="polite"></p>`:''}
         ${p.opts?Object.entries(p.opts).map(([k,v])=>(k==='Colour'&&p.swatches)? swatchHTML(k,v,p.swatches) : `<div class="opt"><label>${k}${isPack?'<span>price varies by size</span>':''}</label><select data-opt="${esc(k)}"><option value="">Choose ${k.toLowerCase()}</option>${v.map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`).join(''):''}
         ${p.fields?fieldsHTML(p):''}
         ${(!p.sold&&studioCfg(p))?artPanelHTML(p):''}
@@ -4721,7 +4734,7 @@ function artStudio(p){
     oL.onclick=()=>{ orient='landscape'; oL.classList.add('active'); oP.classList.remove('active'); dyn(); }; }
   if(cfg.kind==='panel'&&p.cdims){ const oP=$('#orP'), oL=$('#orL'), W=document.getElementById('cdW'), H=document.getElementById('cdH');
     const setWH=(land)=>{ let w=+W.value||600, h2=+H.value||900; const lo=Math.min(w,h2), hi=Math.max(w,h2);
-      W.value = land?hi:lo; H.value = land?lo:hi; dyn(); };
+      W.value = land?hi:lo; H.value = land?lo:hi; W.dispatchEvent(new Event('input',{bubbles:true})); };
     oP.onclick=()=>setWH(false); oL.onclick=()=>setWH(true); }
   ['cdW','cdH'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input',dyn); });
   applySize();
@@ -4748,17 +4761,26 @@ function wireProduct(){
   const addB=$('#addBtn'), pbox=$('#priceBox'), pboxInit=pbox?pbox.innerHTML:'';
   function upd(){ const q=Math.max(1,+qty.value||1); qty.value=q;
     const vp = varPrice(p, selOpts()); const exact = typeof vp==='number';
+    let cdErr='', cdTxt='';
+    if(p.cdims){ const w=+$('#cdW').value||0, h=+$('#cdH').value||0, msg=$('#cdMsg'), cp=$('#cdPrice'), cn=$('#cdPriceNote');
+      cdErr = (w||h) ? cdimsCheck(p,w,h) : 'Enter your width and height in mm';
+      if(msg){ msg.textContent = (w||h) ? cdErr : ''; msg.classList.toggle('bad', !!(w||h) && !!cdErr); }
+      if(!cdErr){ const m2=(w*h)/1e6, each=unitPrice(p,q,{'Custom size':`${w} × ${h} mm`});
+        if(cp) cp.textContent=money(each); if(cn) cn.textContent=`each · ${w} × ${h} mm`;
+        cdTxt=`${w} × ${h} mm = ${(Math.round(m2*10000)/10000).toLocaleString('en-AU',{maximumFractionDigits:4})} m² × ${money(p.p)} per m² = ${money(each)} each<br>${q} × ${money(each)} = <b>${money(each*q)}</b>`; }
+      else { if(cp) cp.textContent=money(p.p); if(cn) cn.textContent='per m² · enter your size for the exact price'; } }
     const u = exact ? vp : unitPrice(p,q); if(unitEl) unitEl.textContent=money(u);
     if(VPRICE[p.s] && pbox){
       pbox.innerHTML = exact ? `<span>${money(vp)}</span><small>each · for your selection</small>`
         : vp===undefined ? `<span>Unavailable</span><small>this combination isn't sold online, try another, or contact us</small>` : pboxInit;
       if(addB){ addB.dataset.unavail = vp===undefined ? '1' : ''; addB.title = vp===undefined ? 'This combination is not available' : ''; } }
-    if(addB){ if(studio) studio.gate(); else addB.disabled = addB.dataset.unavail==='1'; }
+    if(addB){ if(studio) studio.gate(); else addB.disabled = addB.dataset.unavail==='1'; if(p.cdims&&cdErr&&(+$('#cdW').value||+$('#cdH').value)) addB.disabled=true; }
     $$('#tiers .row[data-min]').forEach(r=>r.classList.toggle('active', u===unitPrice(p,+r.dataset.min) && q>=+r.dataset.min && ![...$$('#tiers .row[data-min]')].some(x=>+x.dataset.min>+r.dataset.min && q>=+x.dataset.min)));
     let extra=''; if(p.dims){ const w=+$('#dimW').value, h=+$('#dimH').value; if(w&&h){ const m2=Math.max(0.5,(w*h)/1e6); extra=` · ${m2.toFixed(2)} m² = <b>${money(m2*p.p)}</b> per panel set`; } }
+    if(p.cdims){ sub.innerHTML = cdTxt || `${money(p.p)} per m², enter your width and height for the exact price`; return; }
     sub.innerHTML = p.dims && extra ? `${money(u)} per m²${extra}` : `${q} × ${money(u)} = <b>${money(u*q)}</b>${p.pmax&&!exact?' <span style="color:var(--ink-3)">(from price, choose all options for your exact price)</span>':''}`; }
   $('#qm').onclick=()=>{qty.value=Math.max(1,+qty.value-1);upd()}; $('#qp').onclick=()=>{qty.value=+qty.value+1;upd()}; qty.oninput=upd;
-  $$('#dimW,#dimH').forEach(i=>i&&i.addEventListener('input',upd));
+  $$('#dimW,#dimH,#cdW,#cdH').forEach(i=>i&&i.addEventListener('input',upd));
   $$('[data-opt]').forEach(s=>s.addEventListener('change',upd));
   $$('.sw').forEach(b=>b.onclick=()=>{ const sel=b.closest('.sw-opt').querySelector('select'); sel.value=b.dataset.sw;
     $$('.sw').forEach(x=>x.classList.toggle('on',x===b)); b.setAttribute('aria-checked','true');
@@ -4775,7 +4797,7 @@ function wireProduct(){
     $$('[data-opt]').forEach(s=>{ if(!s.value) missing=missing||s.dataset.opt; else opts[s.dataset.opt]=s.value; });
     if(p.dims){ const w=$('#dimW').value,h=$('#dimH').value; if(!w||!h){ toast('Enter your wall width and height first'); $('#dimW').focus(); return; } opts['Wall']=`${w} × ${h} mm`; }
     if(p.cdims){ const w=+$('#cdW').value, h=+$('#cdH').value; if(!w||!h){ toast('Enter your width and height in mm first'); $('#cdW').focus(); return; }
-      if((p.cdims.maxW&&w>p.cdims.maxW)||(p.cdims.maxH&&h>p.cdims.maxH)){ toast(`Maximum size is ${p.cdims.maxW} × ${p.cdims.maxH} mm`); return; }
+      const bad=cdimsCheck(p,w,h); if(bad){ toast(bad); $('#cdW').focus(); return; }
       opts['Custom size']=`${w} × ${h} mm`; }
     if(missing){ toast(`Choose a ${missing.toLowerCase()} first`); const ms=$(`[data-opt="${missing}"]`); (ms.hidden? ms.closest('.opt').querySelector('.sw') : ms).focus(); return; }
     for(const el of $$('[data-field]')){ const k=el.dataset.field, v=(el.dataset.value!==undefined? el.dataset.value : el.value.trim());

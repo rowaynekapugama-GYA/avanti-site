@@ -54,6 +54,7 @@ function checkCustomSize(p, opts) {
   if (p.pricing_mode !== 'custom_dims') return;
   const wh = parseWH(opts['Custom size']), mx = p.dims_config || {};
   if (!wh) throw new HttpError(400, `Please enter the width and height in millimetres for ${p.name}.`);
+  if (wh[0] < 50 || wh[1] < 50) throw new HttpError(400, `The smallest size for ${p.name} is 50 × 50 mm.`);
   if ((mx.maxW && wh[0] > mx.maxW) || (mx.maxH && wh[1] > mx.maxH)) throw new HttpError(400, `The maximum size for ${p.name} is ${mx.maxW} × ${mx.maxH} mm.`);
 }
 
@@ -71,6 +72,13 @@ export function unitCents(p, qty, opts = {}) {
     if (!m) throw new HttpError(400, `Please enter your wall size for ${p.name}.`);
     const m2 = Math.max(0.5, (m[0] * m[1]) / 1e6);
     return cents(Math.round(m2 * p.base_price * 100) / 100);
+  }
+  // Custom-size products: base price is the rate per m² (Avanti's price list), so price = width × height × rate.
+  // Same rule as unitPrice() in the storefront.
+  if (p.pricing_mode === 'custom_dims') {
+    const m = parseWH(opts['Custom size']);
+    if (!m) throw new HttpError(400, `Please enter the width and height in millimetres for ${p.name}.`);
+    return cents(Math.round((m[0] * m[1]) / 1e6 * p.base_price * 100) / 100);
   }
   if (p.tiers.length) { let u = p.tiers[0].unit_price; p.tiers.forEach(t => { if (qty >= t.min_qty) u = t.unit_price; }); return cents(u); }
   return cents(p.base_price);
@@ -121,8 +129,8 @@ export async function quote(d, body) {
     const qty = Math.floor(Number(l.qty));
     if (!(qty >= 1 && qty <= 100000)) throw new HttpError(400, `Please check the quantity for ${p.name}.`);
     const opts = Object.fromEntries(Object.entries(l.opts || {}).slice(0, 40).map(([k, v]) => [String(k).slice(0, 80), String(v).slice(0, 500)]));
-    const unit = unitCents(p, qty, opts);
     checkCustomSize(p, opts);
+    const unit = unitCents(p, qty, opts);
     const art = l.art || null;
     const artwork = art ? {
       later: !!art.later, design: art.design ? String(art.design).slice(0, 200) : null,

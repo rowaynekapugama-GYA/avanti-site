@@ -40,6 +40,9 @@ checkout, just under Delivery. Only one code works per order.
 - A code never takes off more than the shipping or products it applies to.
 - A use only counts once the order is **paid**. Unfinished checkouts don't use it up.
 - Refunding or cancelling an order doesn't give the use back.
+- Limits are counted when payment goes through. If two people are paying with the same limited code
+  at the same moment, it can go one over its limit. For a code worth a lot, keep the limit tight.
+- Pick codes that are hard to guess for bigger discounts (for example `VIP7KQ2` rather than `VIP`).
 
 ## The Discounts list
 

@@ -30,6 +30,8 @@ done, checkout works exactly as before and the code box is hidden.
 - Shipping profitability takes a shipping discount into account.
 - The setup SQL builder (`scripts/build-setup-sql.mjs`) now includes `supabase/migrations`.
 - Not done this round: sale prices on products.
+- Known limits: two checkouts paying with a limited code at the same moment can take it one over
+  its limit; refunds don't give a use back; no rate limit on trying codes.
 
 ## 4 November 2026: Shipping calculator (client spec v1.0)
 

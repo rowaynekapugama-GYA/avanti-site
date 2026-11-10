@@ -185,7 +185,7 @@ async function quoteDiscount(d, body, { lines, subtotal, shippingCents }) {
   const check = checkCode(c, { subtotalCents: subtotal, usesByEmail: c.per_email_limit && email ? await usesByEmail(d, c.id, email) : null });
   if (!check.ok) return fail(check.message);
   const amt = discountAmounts(c, { lines, shippingCents });
-  if (amt.no_products) return fail(DISCOUNT_MESSAGES.no_products);
+  if (amt.no_products) return fail(DISCOUNT_MESSAGES.invalid);   // never says the code exists
   return { ok: true, code, id: c.id, applies_to: c.applies_to, kind: c.kind,
     value: c.kind === 'percent' ? Number(c.percent) : c.amount_cents / 100,
     product_cents: amt.product_cents, shipping_cents: amt.shipping_cents, eligible: amt.eligible, shipping_pending: !!amt.shipping_pending };

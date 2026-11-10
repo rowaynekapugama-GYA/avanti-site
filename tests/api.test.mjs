@@ -1135,6 +1135,12 @@ test('discounts: shipping code at checkout, Stripe lines match the order, use co
   assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 1);
   await postStripe(stripeEvent(o, 'checkout.session.completed', {}, 'evt_again'));   // a repeated webhook doesn't count twice
   assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 1);
+  // the first notice stopped before the use was counted: the next repeat of the notice catches it up, once
+  await d.remove('discount_redemptions', `order_id=eq.${o.order_id}`); await d.update('discount_codes', 'code=eq.FREESHIP', { uses: 0 });
+  await postStripe(stripeEvent(o, 'checkout.session.completed', {}, 'evt_retry_1'));
+  await postStripe(stripeEvent(o, 'checkout.session.completed', {}, 'evt_retry_2'));
+  assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 1);
+  assert.equal((await d.select('discount_redemptions', `select=id&order_id=eq.${o.order_id}`)).length, 1);
   const mail = mocks.state.emails.find(m => m.to[0] === 'jo.buyer@example.com' && /Order confirmed/.test(m.subject));
   assert.match(mail.html, /Shipping discount \(FREESHIP\)/); assert.match(mail.text, /Shipping discount \(FREESHIP\): -\$/);
   const staff = mocks.state.emails.find(m => /^New order/.test(m.subject));
@@ -1158,7 +1164,7 @@ test('discounts: product codes (percent, flat, selected products) and PayPal bre
   const b20 = (await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [LINE_BANNER, LINE_TOPPER], postcode: '2164', discount_code: 'banner20' } })).data;
   assert.equal(b20.product_discount_cents, 2000);   // once, not per banner
   const topper = (await quoteWith('TOPPER5')).data;    // no topper in the cart
-  assert.equal(topper.discount.ok, false); assert.equal(topper.discount.message, "That code doesn't apply to anything in your cart"); assert.equal(topper.total_cents, plain.total_cents);
+  assert.equal(topper.discount.ok, false); assert.equal(topper.discount.message, "That code isn't valid"); assert.equal(topper.total_cents, plain.total_cents);
   const o = await newOrder('paypal', { lines: [LINE_BANNER, LINE_TOPPER], discount_code: 'Banner20' });
   const pp = mocks.state.paypalOrders[o.row.provider_session_id].body.purchase_units[0];
   assert.equal(pp.amount.breakdown.discount.value, '20.00'); assert.equal(pp.amount.value, (o.row.total_cents / 100).toFixed(2));

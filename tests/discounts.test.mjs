@@ -105,3 +105,8 @@ test('product discount spread over lines adds up exactly, and card lines add up 
   const plain = stripeLines({ lines, subtotal: SUB, deliveryCents: 3850, productDiscount: 0, shippingDiscount: 0, discount: null, total: SUB + 3850 });
   assert.deepEqual(plain.map(i => [i.quantity, i.price_data.unit_amount]), [[3, 1500], [1, 12000], [1, 768], [1, 3850]]);   // unchanged without a code
 });
+test('dates that do not exist are refused, not rolled over', () => {
+  assert.throws(() => sydneyDayBoundary('2026-02-30'), /isn't a real date/);
+  assert.throws(() => sydneyDayBoundary('2026-13-01'), /isn't a real date/);
+  assert.equal(sydneyDayBoundary('2028-02-29'), '2028-02-28T13:00:00.000Z');   // leap day, AEDT
+});

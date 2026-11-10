@@ -33,6 +33,11 @@ shipping discount. GST = one eleventh of (subtotal - product discount), plus the
 product discount is spread across the eligible lines so the lines add up exactly to the total;
 PayPal gets its `discount` and `shipping_discount` fields.
 
+**Known limits:** uses are counted when an order is paid, so two checkouts paying with a
+limited code at the same moment can take it one over its limit; refunds and cancellations don't
+give a use back; there is no rate limit on trying codes at checkout, so valuable codes should not
+be easy to guess.
+
 **Tests:** `npm run test:maths` (no database needed) and `npm test` (needs a test database, see
 the top of `tests/api.test.mjs`).
 

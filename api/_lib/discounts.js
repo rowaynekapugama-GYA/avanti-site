@@ -11,8 +11,9 @@ export const MESSAGES = {
   expired: 'That code has expired',
   used_up: 'That code has already been used the maximum number of times',
   min: c => `Your order needs to be at least ${money(c)} to use this code`,
-  no_products: "That code doesn't apply to anything in your cart",
 };
+
+// (A code for selected products with none of them in the cart also gets "isn't valid", so nobody can tell it exists.)
 
 // Codes are letters and digits; customers can type them in any case, with spaces around them.
 export const normaliseCode = s => String(s == null ? '' : s).trim().toUpperCase();
@@ -30,6 +31,8 @@ export function sydneyDayBoundary(day, end = false, tz = 'Australia/Sydney') {
   const m = String(day).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) throw new HttpError(400, 'Please enter dates as day, month and year.');
   const [y, mo, d] = [+m[1], +m[2], +m[3]];
+  const check = new Date(Date.UTC(y, mo - 1, d));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) throw new HttpError(400, `${day} isn't a real date.`);
   // start from midnight UTC on that day, then correct by the zone offset at that moment (twice, for DST edges)
   let t = Date.UTC(y, mo - 1, d + (end ? 1 : 0), 0, 0, 0);
   for (let i = 0; i < 2; i++) {

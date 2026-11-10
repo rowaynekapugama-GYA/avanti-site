@@ -215,5 +215,9 @@ export async function markPaid(d, order, { actor, providerRef, providerStatus, a
       note: `Payment amount ${amountCents} does not match order total ${order.total_cents}; not marked paid. Please check with the payment provider.` });
     return { changed: false, mismatch: true };
   }
-  return move(d, order.id, 'paid', actor, null, { provider_ref: providerRef || '', provider_status: providerStatus || 'paid' }, cfg);
+  const res = await move(d, order.id, 'paid', actor, null, { provider_ref: providerRef || '', provider_status: providerStatus || 'paid' }, cfg);
+  // A repeated payment notice for an order that is already paid: make sure its discount code use was counted
+  // (if the first notice stopped part way, this catches it up). Counting is safe to repeat: it only ever counts once.
+  if (!res.changed && order.discount_code_id && ['paid', 'in_production', 'dispatched', 'delivered'].includes(order.status)) await redeem(d, order);
+  return res;
 }

@@ -30,13 +30,15 @@ function discountIn(b, cfg) {
   const kind = ['percent', 'amount'].includes(b.kind) ? b.kind : bad('Choose a percentage or a dollar amount.');
   const num = (v, label) => { const s = String(v ?? '').trim().replace(/^\$/, ''); if (!/^\d+(\.\d{1,2})?$/.test(s)) bad(`${label} must be a number with up to 2 decimal places.`); return Number(s); };
   let percent = null, amount_cents = null;
+  const MAX = 10_000_000;   // $100,000: far above any real discount, and well inside what the database holds
   if (kind === 'percent') { percent = num(b.percent, 'The percentage'); if (!(percent > 0 && percent <= 100)) bad('The percentage must be more than 0 and no more than 100.'); }
-  else { amount_cents = Math.round(num(b.amount, 'The dollar amount') * 100); if (!(amount_cents > 0)) bad('The dollar amount must be more than $0.'); }
+  else { amount_cents = Math.round(num(b.amount, 'The dollar amount') * 100); if (!(amount_cents > 0)) bad('The dollar amount must be more than $0.'); if (amount_cents > MAX) bad('The dollar amount must be no more than $100,000.'); }
   const min = String(b.min_subtotal ?? '').trim() === '' ? null : Math.round(num(b.min_subtotal, 'The minimum order') * 100);
+  if (min > MAX) bad('The minimum order must be no more than $100,000.');
   const starts_at = b.start_date ? sydneyDayBoundary(b.start_date, false, cfg.timezone) : null;
   const ends_at = b.end_date ? sydneyDayBoundary(b.end_date, true, cfg.timezone) : null;
   if (starts_at && ends_at && ends_at < starts_at) bad('The end date is before the start date.');
-  const int = (v, label) => { const s = String(v ?? '').trim(); if (s === '') return null; if (!/^\d+$/.test(s) || +s < 1) bad(`${label} must be a whole number of 1 or more, or left empty.`); return +s; };
+  const int = (v, label) => { const s = String(v ?? '').trim(); if (s === '') return null; if (!/^\d+$/.test(s) || +s < 1 || +s > 1_000_000) bad(`${label} must be a whole number from 1 to 1,000,000, or left empty.`); return +s; };
   return { code, description: String(b.description || '').trim().slice(0, 500) || null, applies_to, product_scope, product_slugs, kind, percent, amount_cents,
     min_subtotal_cents: min || null, starts_at, ends_at, usage_limit: int(b.usage_limit, 'Total uses'), per_email_limit: int(b.per_email_limit, 'Uses per customer'),
     active: b.active !== false };
@@ -182,7 +184,7 @@ async function adminAction(req, cfg, admin) {
       const range = `paid_at=gte.${d.q(new Date(new Date(from + 'T00:00:00Z').getTime() - 86400000).toISOString())}&paid_at=lt.${d.q(end)}&order=paid_at.desc&limit=1000`;
       let rows;   // shipping discounts are included when the discount update has been run
       try { rows = await d.select('orders', `select=${cols},shipping_discount_cents&${range}`); }
-      catch (e) { rows = await d.select('orders', `select=${cols}&${range}`); }
+      catch (e) { if (e.code !== '42703' && !/shipping_discount_cents/.test(String(e.message))) throw e; rows = await d.select('orders', `select=${cols}&${range}`); }
       const local = iso => new Intl.DateTimeFormat('en-CA', { timeZone: cfg.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
       const inRange = rows.filter(r => { const dd = local(r.paid_at); return dd >= from && dd <= to; });
       const ids = inRange.map(r => r.id);

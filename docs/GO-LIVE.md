@@ -38,6 +38,7 @@ This file is the technical checklist.
 | `BUSINESS_ABN`, `BUSINESS_ADDRESS` | shown in every marketing email (Spam Act) |
 | `CRON_SECRET` | any long random string; Vercel sends it to the scheduled job |
 | `PAYMENTS_SIMULATOR` | `true` on staging only, for test orders with no keys. Never on live. |
+| `DISCOUNTS_ENABLED` | `true` turns on discount codes at checkout (run the discount codes SQL first). Default off. |
 
 ## 3. Webhooks to register
 

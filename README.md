@@ -1,5 +1,41 @@
 # Avanti Print & Design, new storefront (v1)
 
+Version 2026.11.10. Release notes: `CHANGELOG.md`.
+
+## Discount codes (November 2026)
+
+Staff create codes in **Dashboard > Discounts** (admin accounts only; editors can't see it).
+Customers enter one code per order at checkout, under Delivery. Guide for the Avanti team:
+`docs/HOW-TO-DISCOUNT-CODES.md`.
+
+**Setting:** `DISCOUNTS_ENABLED` in Vercel (Production and Preview). `true` turns codes on;
+anything else, or unset, leaves checkout exactly as it was with no code box. Codes also stay off
+if the database tables are missing, so the site can't break if the SQL hasn't been run.
+Changing the setting needs a redeploy.
+
+**Database:** `supabase/migrations/20261110120000_discount_codes.sql` (safe to run again) adds:
+
+| Table or column | What it holds |
+| --- | --- |
+| `discount_codes` | One row per code: code (capitals, letters and digits), staff description, applies to shipping or products, all or selected products (`product_slugs`), percent or amount in cents, minimum order, start and end, usage limits, active, uses |
+| `discount_redemptions` | One row per paid order that used a code: code, order, email, amounts. Used for the per-customer limit and the "orders that used it" list |
+| `orders.discount_code`, `discount_code_id`, `discount_type`, `discount_applies_to`, `discount_value`, `product_discount_cents`, `shipping_discount_cents` | What each order used and saved |
+| `discount_redeem(order)` | Counts a use once the order is paid. Server only |
+
+Row-level security: admins can read and change codes and read redemptions; the public has no
+access at all and can only check a code through `/api/checkout?action=quote`.
+
+**How the maths works** (`api/_lib/discounts.js`): all money in whole cents; percentages round
+half up to the cent; a discount never exceeds what it applies to; a flat amount on selected
+products comes off once per order. Order total = subtotal - product discount + delivery -
+shipping discount. GST = one eleventh of (subtotal - product discount), plus the delivery GST
+(one eleventh of the discounted delivery when there's a shipping discount). For Stripe the
+product discount is spread across the eligible lines so the lines add up exactly to the total;
+PayPal gets its `discount` and `shipping_discount` fields.
+
+**Tests:** `npm run test:maths` (no database needed) and `npm test` (needs a test database, see
+the top of `tests/api.test.mjs`).
+
 ## Changelog: checkout, orders and email marketing (October 2026)
 
 - **Checkout:** cart now kept between visits; new checkout page with delivery choices, GST, a

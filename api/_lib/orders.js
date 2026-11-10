@@ -4,6 +4,7 @@ import { HttpError, cents, audit, config } from './core.js';
 import { loadShippingConfig, shippingFor } from './shipping/store.js';
 import { UNAVAILABLE, METHOD, serialiseQuote } from './shipping/engine.js';
 import { STATE_RANGES } from './shipping/validate.js';
+import { normaliseCode, CODE_RE, MESSAGES as DISCOUNT_MESSAGES, checkCode, discountAmounts, discountsReady, findCode, usesByEmail, gstIn } from './discounts.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -157,9 +158,37 @@ export async function quote(d, body) {
   }
   lines.forEach(l => { delete l.ship_opts; });
   const deliveryCents = shipping && shipping.ok ? shipping.inc_gst_cents : 0;
-  const subtotal = lines.reduce((s, l) => s + l.line_cents, 0), total = subtotal + deliveryCents;
-  return { lines, shipping, deliveryCents, deliveryMethod: shipping && shipping.ok ? METHOD : null, subtotal, total,
-    gst: Math.round(subtotal / 11) + (shipping && shipping.ok ? shipping.gst_cents : 0) };
+  const subtotal = lines.reduce((s, l) => s + l.line_cents, 0);
+  // Discount code (one per order), checked and priced here, never trusted from the browser
+  const discount = await quoteDiscount(d, body, { lines, subtotal, shippingCents: shipping && shipping.ok ? deliveryCents : null });
+  const productDiscount = discount && discount.ok ? discount.product_cents : 0;
+  const shippingDiscount = discount && discount.ok ? discount.shipping_cents : 0;
+  const total = subtotal - productDiscount + deliveryCents - shippingDiscount;
+  // Prices include GST: GST is one eleventh of what is actually charged. Without a discount this is
+  // exactly the calculation used before discounts existed.
+  const gst = gstIn(subtotal - productDiscount) + (shipping && shipping.ok ? (shippingDiscount ? gstIn(deliveryCents - shippingDiscount) : shipping.gst_cents) : 0);
+  return { lines, shipping, deliveryCents, deliveryMethod: shipping && shipping.ok ? METHOD : null, subtotal, total, gst,
+    discount, productDiscount, shippingDiscount };
+}
+
+// The discount for this cart, or null when no code was entered (or discount codes are switched off).
+// An unusable code comes back as { ok: false, message } so checkout can show the message.
+async function quoteDiscount(d, body, { lines, subtotal, shippingCents }) {
+  const code = normaliseCode(body.discount_code);
+  if (!code) return null;
+  if (!(await discountsReady(d, config()))) return null;     // switched off: checkout exactly as before
+  const fail = message => ({ ok: false, code, message });
+  if (!CODE_RE.test(code)) return fail(DISCOUNT_MESSAGES.invalid);
+  const c = await findCode(d, code);
+  if (!c) return fail(DISCOUNT_MESSAGES.invalid);                      // same message whether or not the code exists
+  const email = body.customer && body.customer.email ? String(body.customer.email).trim().toLowerCase() : (body.email ? String(body.email).trim().toLowerCase() : '');
+  const check = checkCode(c, { subtotalCents: subtotal, usesByEmail: c.per_email_limit && email ? await usesByEmail(d, c.id, email) : null });
+  if (!check.ok) return fail(check.message);
+  const amt = discountAmounts(c, { lines, shippingCents });
+  if (amt.no_products) return fail(DISCOUNT_MESSAGES.no_products);
+  return { ok: true, code, id: c.id, applies_to: c.applies_to, kind: c.kind,
+    value: c.kind === 'percent' ? Number(c.percent) : c.amount_cents / 100,
+    product_cents: amt.product_cents, shipping_cents: amt.shipping_cents, eligible: amt.eligible, shipping_pending: !!amt.shipping_pending };
 }
 
 export async function createPendingOrder(d, body) {
@@ -167,6 +196,10 @@ export async function createPendingOrder(d, body) {
   const q = await quote(d, { ...body, postcode: cust.address.postcode });
   // no delivery price for this postcode (or this cart): never fall back to a cheaper rate
   if (!q.shipping || !q.shipping.ok) throw new HttpError(400, UNAVAILABLE);
+  // a code that can't be used is never silently dropped: the customer must see the real total before paying
+  if (q.discount && !q.discount.ok) throw new HttpError(400, `${q.discount.message}. Please remove it and try again.`, { discount_error: true });
+  // card and PayPal payments need at least 50 cents
+  if (q.discount && q.total < 50) throw new HttpError(400, 'With this code the order total is too low to pay online. Please call us on (02) 9729 0139 and we\'ll look after it.');
   // artwork the customer chose to upload must have arrived (Lauren's order, 27 Oct 2026: files lost on reload)
   const noFile = q.lines.find(l => l.artwork && !l.artwork.later && !l.artwork.design && (l.artwork.files || []).some(f => !f.path && !f.copy));
   if (noFile) throw new HttpError(400, `The artwork for ${noFile.name} didn't upload. Please remove it from your cart and add it again with your file, or choose "supply artwork later".`);
@@ -178,6 +211,8 @@ export async function createPendingOrder(d, body) {
     provider: body.provider, marketing_opt_in: !!body.marketing_opt_in, campaign_id: campaign,
     customer_note: String(body.note || '').trim().slice(0, 1000) || null,
   };
+  if (q.discount && q.discount.ok) Object.assign(row, { discount_code: q.discount.code, discount_code_id: q.discount.id, discount_type: q.discount.kind,
+    discount_applies_to: q.discount.applies_to, discount_value: q.discount.value, product_discount_cents: q.productDiscount, shipping_discount_cents: q.shippingDiscount });
   // the full shipping calculation, saved with the order and never changed afterwards
   const ship = { shipping_quote: serialiseQuote(q.shipping), shipping_config_version: q.shipping.config_version,
     shipping_postcode: q.shipping.postcode, shipping_zone: q.shipping.zone && q.shipping.zone.name, shipping_ex_gst_cents: q.shipping.ex_gst_cents };
@@ -197,7 +232,7 @@ export async function createPendingOrder(d, body) {
     note: `Check the address: postcode ${cust.address.postcode} isn't normally in ${cust.address.state}. Delivery was priced for ${cust.address.postcode} (${q.shipping.zone && q.shipping.zone.name}).` });
   await d.insert('order_items', q.lines.map(l => ({ ...l, order_id: order.id })));
   await d.insert('order_events', { order_id: order.id, from_status: null, to_status: 'pending_payment', actor: 'customer',
-    note: `Checkout started with ${body.provider}`, data: { total_cents: q.total } });
+    note: `Checkout started with ${body.provider}${q.discount && q.discount.ok ? `, discount code ${q.discount.code}` : ''}`, data: { total_cents: q.total } });
   return { order, quote: q };
 }
 

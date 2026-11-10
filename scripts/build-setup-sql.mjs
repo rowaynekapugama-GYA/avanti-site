@@ -53,11 +53,13 @@ for (const s of stmts) {
 await mkdir(out, { recursive: true });
 for (const f of await readdir(out)) if (/^\d-.*\.sql$/.test(f)) await unlink(path.join(out, f));
 
-const migDir = path.join(here, 'migrations');
-const migs = (await readdir(migDir)).filter(f => f.endsWith('.sql')).sort();
+// older migrations live in scripts/migrations, newer ones (discount codes onwards) in supabase/migrations
+const migDir = path.join(here, 'migrations'), supaDir = path.join(here, '..', 'supabase', 'migrations');
+const sqlIn = async dir => { try { return (await readdir(dir)).filter(f => f.endsWith('.sql')).sort().map(f => path.join(dir, f)); } catch { return []; } };
+const migs = [...await sqlIn(migDir), ...await sqlIn(supaDir)];
 let tables = `-- Avanti: step 1 of ${1 + parts.length}. Creates every table, security rule and function.\n-- Paste the whole file into Supabase > SQL Editor > New query, then Run. Safe to run again.\n\n`;
 tables += await readFile(path.join(here, 'supabase-schema.sql'), 'utf8');
-for (const m of migs) tables += `\n\n-- ===== ${m} =====\n\n` + await readFile(path.join(migDir, m), 'utf8');
+for (const m of migs) tables += `\n\n-- ===== ${path.basename(m)} =====\n\n` + await readFile(m, 'utf8');
 tables += `\n\nselect 'Step 1 done: tables created' as result;\n`;
 await writeFile(path.join(out, '1-tables.sql'), tables);
 

@@ -1090,3 +1090,154 @@ test('shipping: a postcode outside the chosen state is flagged on the order for 
   const ok = await newOrder('stripe');
   assert.ok(!(await events(ok.order_id)).some(e => /isn't normally in/.test(e.note || '')));
 });
+
+// ---------- discount codes (10 Nov 2026) ----------
+async function discountReset(on = true) {
+  await reset();
+  await d.remove('discount_codes', 'id=not.is.null');
+  process.env.DISCOUNTS_ENABLED = on ? 'true' : 'false';
+}
+const mkCode = async (body) => { const r = await act(adminToken, 'discount-save', { active: true, ...body }); assert.equal(r.status, 200, JSON.stringify(r.data)); return r.data.code; };
+const quoteWith = (code, extra = {}) => call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [LINE_BANNER], postcode: '2164', discount_code: code, ...extra } });
+
+test('discounts: switched off (default) the code is ignored and checkout is exactly as before', async () => {
+  await discountReset(false);
+  await d.insert('discount_codes', { code: 'OFF10', applies_to: 'products', kind: 'percent', percent: 10 });
+  const cfgR = await call(checkout.GET, '/api/checkout?action=config'); assert.equal(cfgR.data.discounts, false);
+  const plain = await quoteWith(''), coded = await quoteWith('off10');
+  assert.equal(coded.data.total_cents, plain.data.total_cents); assert.equal(coded.data.discount, null); assert.equal(coded.data.product_discount_cents, 0);
+  const o = await newOrder('stripe', { discount_code: 'OFF10' });
+  assert.equal(o.row.discount_code, null); assert.equal(o.row.total_cents, plain.data.total_cents);
+  delete process.env.DISCOUNTS_ENABLED;
+});
+
+test('discounts: shipping code at checkout, Stripe lines match the order, use counted only after payment', async () => {
+  await discountReset();
+  assert.equal((await call(checkout.GET, '/api/checkout?action=config')).data.discounts, true);
+  const c = await mkCode({ code: ' freeship ', description: 'Free delivery for Joey', applies_to: 'shipping', kind: 'percent', percent: '100' });
+  assert.equal(c.code, 'FREESHIP'); assert.equal(c.status, 'Active');
+  const plain = (await quoteWith('')).data, q = (await quoteWith('  FreeShip ')).data;
+  assert.equal(q.discount.ok, true); assert.equal(q.shipping_discount_cents, plain.delivery_cents); assert.equal(q.product_discount_cents, 0);
+  assert.equal(q.total_cents, plain.subtotal_cents);
+  assert.equal(q.gst_cents, Math.round(plain.subtotal_cents / 11));   // GST on what is charged: no delivery GST left
+  // no postcode yet: the code is accepted and the shipping discount follows once delivery is priced
+  const early = (await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [LINE_BANNER], discount_code: 'FREESHIP' } })).data;
+  assert.equal(early.discount.ok, true); assert.equal(early.discount.shipping_pending, true);
+  const o = await newOrder('stripe', { discount_code: 'freeship' });
+  assert.equal(o.row.discount_code, 'FREESHIP'); assert.equal(o.row.discount_type, 'percent'); assert.equal(o.row.discount_applies_to, 'shipping');
+  assert.equal(o.row.shipping_discount_cents, o.row.delivery_cents); assert.equal(o.row.total_cents, o.row.subtotal_cents);
+  const s = mocks.state.stripeSessions.at(-1);
+  let sum = 0; for (let i = 0; s.params[`line_items[${i}][quantity]`]; i++) sum += +s.params[`line_items[${i}][quantity]`] * +s.params[`line_items[${i}][price_data][unit_amount]`];
+  assert.equal(sum, o.row.total_cents); assert.equal(s.params['metadata[discount_code]'], 'FREESHIP');
+  assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 0);   // not used until paid
+  await postStripe(stripeEvent(o));
+  assert.equal((await d.one('orders', `select=status&id=eq.${o.order_id}`)).status, 'paid');
+  assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 1);
+  await postStripe(stripeEvent(o, 'checkout.session.completed', {}, 'evt_again'));   // a repeated webhook doesn't count twice
+  assert.equal((await d.one('discount_codes', `select=uses&code=eq.FREESHIP`)).uses, 1);
+  const mail = mocks.state.emails.find(m => m.to[0] === 'jo.buyer@example.com' && /Order confirmed/.test(m.subject));
+  assert.match(mail.html, /Shipping discount \(FREESHIP\)/); assert.match(mail.text, /Shipping discount \(FREESHIP\): -\$/);
+  const staff = mocks.state.emails.find(m => /^New order/.test(m.subject));
+  assert.match(staff.html, /Shipping discount \(FREESHIP\)/);
+  const got = await act(adminToken, 'discount-get', { id: c.id });
+  assert.equal(got.data.orders.length, 1); assert.equal(got.data.orders[0].order.number, o.number);
+  const st = await call(checkout.GET, `/api/checkout?action=status&id=${o.order_id}&t=${o.token}`);
+  assert.equal(st.data.discount_code, 'FREESHIP'); assert.equal(st.data.shipping_discount_cents, o.row.delivery_cents);
+});
+
+test('discounts: product codes (percent, flat, selected products) and PayPal breakdown', async () => {
+  await discountReset();
+  await mkCode({ code: 'TEN', applies_to: 'products', kind: 'percent', percent: '10' });
+  await mkCode({ code: 'BANNER20', applies_to: 'products', product_scope: 'selected', product_slugs: ['pull-up-banner'], kind: 'amount', amount: '20' });
+  await mkCode({ code: 'TOPPER5', applies_to: 'products', product_scope: 'selected', product_slugs: ['name-and-age-cake-topper'], kind: 'amount', amount: '5' });
+  const plain = (await quoteWith('')).data;
+  const ten = (await quoteWith('ten')).data;
+  assert.equal(ten.product_discount_cents, Math.floor((plain.subtotal_cents * 1000 + 5000) / 10000));
+  assert.equal(ten.total_cents, plain.subtotal_cents - ten.product_discount_cents + plain.delivery_cents);
+  assert.equal(ten.gst_cents, Math.round((plain.subtotal_cents - ten.product_discount_cents) / 11) + plain.shipping.gst_cents);
+  const b20 = (await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [LINE_BANNER, LINE_TOPPER], postcode: '2164', discount_code: 'banner20' } })).data;
+  assert.equal(b20.product_discount_cents, 2000);   // once, not per banner
+  const topper = (await quoteWith('TOPPER5')).data;    // no topper in the cart
+  assert.equal(topper.discount.ok, false); assert.equal(topper.discount.message, "That code doesn't apply to anything in your cart"); assert.equal(topper.total_cents, plain.total_cents);
+  const o = await newOrder('paypal', { lines: [LINE_BANNER, LINE_TOPPER], discount_code: 'Banner20' });
+  const pp = mocks.state.paypalOrders[o.row.provider_session_id].body.purchase_units[0];
+  assert.equal(pp.amount.breakdown.discount.value, '20.00'); assert.equal(pp.amount.value, (o.row.total_cents / 100).toFixed(2));
+  const bd = pp.amount.breakdown;
+  assert.equal(Math.round(+bd.item_total.value * 100) + Math.round(+bd.shipping.value * 100) - 2000, o.row.total_cents);
+  mocks.approve(o.row.provider_session_id);
+  await call(checkout.GET, `/api/checkout?action=paypal-return&order=${o.order_id}&token=${o.row.provider_session_id}`);
+  assert.equal((await d.one('orders', `select=status,product_discount_cents&id=eq.${o.order_id}`)).status, 'paid');
+  assert.equal((await d.one('discount_codes', 'select=uses&code=eq.BANNER20')).uses, 1);
+  // Stripe with a product code: discounted lines are whole-line amounts that add up to the total
+  const s1 = await newOrder('stripe', { lines: [LINE_BANNER, LINE_TOPPER], discount_code: 'TEN' });
+  const s = mocks.state.stripeSessions.at(-1);
+  let sum = 0; for (let i = 0; s.params[`line_items[${i}][quantity]`]; i++) sum += +s.params[`line_items[${i}][quantity]`] * +s.params[`line_items[${i}][price_data][unit_amount]`];
+  assert.equal(sum, s1.row.total_cents); assert.match(s.params['line_items[0][price_data][product_data][description]'], /Discount code TEN/);
+});
+
+test('discounts: plain messages for codes that can not be used, and order creation refuses them', async () => {
+  await discountReset();
+  const msg = async code => (await quoteWith(code)).data.discount.message;
+  assert.equal(await msg('NOSUCHCODE'), "That code isn't valid");
+  assert.equal(await msg('bad code!'), "That code isn't valid");
+  const off = await mkCode({ code: 'SLEEPING', applies_to: 'products', kind: 'percent', percent: '5', active: false });
+  assert.equal(await msg('sleeping'), "That code isn't valid");            // same message as a code that doesn't exist
+  await mkCode({ code: 'OLD', applies_to: 'products', kind: 'percent', percent: '5', start_date: '2025-01-01', end_date: '2025-01-31' });
+  assert.equal(await msg('old'), 'That code has expired');
+  await mkCode({ code: 'SOON', applies_to: 'products', kind: 'percent', percent: '5', start_date: '2099-01-01' });
+  assert.equal(await msg('soon'), "That code isn't valid");
+  await mkCode({ code: 'BIGSPEND', applies_to: 'products', kind: 'amount', amount: '50', min_subtotal: '1000' });
+  assert.equal(await msg('bigspend'), 'Your order needs to be at least $1,000.00 to use this code');
+  const one = await mkCode({ code: 'ONCE', applies_to: 'products', kind: 'percent', percent: '5', usage_limit: '1' });
+  await d.update('discount_codes', `id=eq.${one.id}`, { uses: 1 });
+  assert.equal(await msg('once'), 'That code has already been used the maximum number of times');
+  const r = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER, lines: [LINE_BANNER], discount_code: 'OLD' } });
+  assert.equal(r.status, 400); assert.match(r.data.error, /That code has expired. Please remove it/);
+  // per-customer limit: the same email can't use it twice once the first order is paid
+  await mkCode({ code: 'WELCOME', applies_to: 'products', kind: 'percent', percent: '10', per_email_limit: '1' });
+  const o = await newOrder('stripe', { discount_code: 'WELCOME' }); await postStripe(stripeEvent(o));
+  const again = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER, lines: [LINE_BANNER], discount_code: 'welcome' } });
+  assert.equal(again.status, 400); assert.match(again.data.error, /used the maximum number of times/);
+  const other = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: { ...CUSTOMER, email: 'someone.else@example.com' }, lines: [LINE_BANNER], discount_code: 'welcome' } });
+  assert.equal(other.status, 201);
+  // a browser can't send its own discount or total
+  const forged = (await call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines: [LINE_BANNER], postcode: '2164', product_discount_cents: 99999, total_cents: 1, discount: { ok: true } } })).data;
+  assert.equal(forged.product_discount_cents, 0); assert.equal(forged.discount, null);
+  assert.equal(off.status, 'Inactive');
+});
+
+test('discounts: dashboard rules (admin only, validation, duplicates, delete vs deactivate, no public access)', async () => {
+  await discountReset();
+  for (const [body, re] of [[{ code: 'A', applies_to: 'products', kind: 'percent', percent: '10' }, /letters and numbers/], [{ code: 'X-1', applies_to: 'products', kind: 'percent', percent: '10' }, /letters and numbers/],
+    [{ code: 'P0', applies_to: 'products', kind: 'percent', percent: '0' }, /more than 0/], [{ code: 'P101', applies_to: 'products', kind: 'percent', percent: '101' }, /no more than 100/],
+    [{ code: 'AMT', applies_to: 'shipping', kind: 'amount', amount: '5.555' }, /2 decimal/], [{ code: 'SEL', applies_to: 'products', product_scope: 'selected', product_slugs: [], kind: 'percent', percent: '5' }, /at least one product/],
+    [{ code: 'DATES', applies_to: 'products', kind: 'percent', percent: '5', start_date: '2026-12-10', end_date: '2026-12-01' }, /end date is before/],
+    [{ code: 'LIM', applies_to: 'products', kind: 'percent', percent: '5', usage_limit: '0' }, /whole number/]]) {
+    const r = await act(adminToken, 'discount-save', body); assert.equal(r.status, 400, JSON.stringify(body)); assert.match(r.data.error, re);
+  }
+  const c = await mkCode({ code: 'SPRING', applies_to: 'products', kind: 'amount', amount: '12.50', start_date: '2026-11-12', end_date: '2026-11-30' });
+  assert.equal(c.amount_cents, 1250); assert.equal(c.start_date, '2026-11-12'); assert.equal(c.end_date, '2026-11-30'); assert.equal(c.starts_at, '2026-11-11T13:00:00.000+00:00');
+  assert.equal((await act(adminToken, 'discount-save', { code: 'spring', applies_to: 'shipping', kind: 'percent', percent: '5' })).status, 409);
+  const edited = (await act(adminToken, 'discount-save', { id: c.id, code: 'SPRING', applies_to: 'products', kind: 'percent', percent: '15', description: 'Spring sale' })).data.code;
+  assert.equal(edited.percent, 15); assert.equal(edited.description, 'Spring sale');
+  // used code: can't be deleted or renamed, can be switched off
+  const o = await newOrder('stripe', { discount_code: 'SPRING' }); await postStripe(stripeEvent(o));
+  assert.equal((await act(adminToken, 'discount-delete', { id: c.id })).status, 409);
+  assert.equal((await act(adminToken, 'discount-save', { id: c.id, code: 'SPRING2', applies_to: 'products', kind: 'percent', percent: '15' })).status, 409);
+  const offR = await act(adminToken, 'discount-active', { id: c.id, active: false }); assert.equal(offR.data.code.status, 'Inactive');
+  assert.equal((await quoteWith('spring')).data.discount.message, "That code isn't valid");
+  const unused = await mkCode({ code: 'TYPO', applies_to: 'shipping', kind: 'amount', amount: '5' });
+  assert.equal((await act(adminToken, 'discount-delete', { id: unused.id })).status, 200);
+  const list = (await act(adminToken, 'discount-list', {})).data; assert.equal(list.ready, true); assert.deepEqual(list.codes.map(x => x.code), ['SPRING']);
+  // editors and the public never reach codes
+  for (const [action, body] of [['discount-list', {}], ['discount-get', { id: c.id }], ['discount-save', { code: 'EDIT1', applies_to: 'shipping', kind: 'percent', percent: '5' }], ['discount-delete', { id: c.id }], ['discount-active', { id: c.id, active: true }]])
+    assert.equal((await act(editorToken, action, body)).status, 403, action);
+  assert.equal((await act(null, 'discount-list', {})).status, 401);
+  const pub = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/discount_codes?select=*`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.ok(pub.status >= 400 || (await pub.json()).length === 0, 'anon must not read codes');
+  const ed = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/discount_codes?select=*`, { headers: { apikey: T.TEST_ANON_KEY, Authorization: `Bearer ${editorToken}` } });
+  assert.ok(ed.status >= 400 || (await ed.json()).length === 0, 'editor must not read codes');
+  const red = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/rpc/discount_redeem`, { method: 'POST', headers: { apikey: T.TEST_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_order: o.order_id }) });
+  assert.ok(red.status >= 400, 'the public cannot count uses');
+  delete process.env.DISCOUNTS_ENABLED;
+});

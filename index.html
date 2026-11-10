@@ -1097,6 +1097,12 @@ p{margin:0 0 1em}
 .co-muted{color:var(--ink-3)}.co-small{font-size:.8rem;margin:0}
 .co-note{background:var(--kraft-tint,#faf6ef);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;font-size:.9rem;line-height:1.5}
 .co-note.bad{border-color:var(--red);background:#fff5f5}
+.co-code{margin-top:14px}.co-code>label{display:block;font-size:.84rem;font-weight:700;margin-bottom:6px}
+.co-code-row{display:flex;gap:8px}.co-code-row input{flex:1;min-width:0;text-transform:uppercase}.co-code-row .btn{flex:none}
+.co-code-on{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border:1.5px dashed var(--ink);border-radius:var(--r);font-size:.9rem}
+.co-code-2{margin-top:12px;font-weight:600!important;font-size:.8rem!important;color:var(--ink-3)}
+.co-code-msg{margin:8px 0 0;font-size:.86rem;line-height:1.45}.co-code-msg.bad{color:var(--red);font-weight:600}
+.co-disc{color:#1d7a46}
 .co-warn{color:var(--red);font-size:.78rem;font-weight:600;margin-top:2px}
 .co-summary{background:var(--paper-2,#f4f2ee);border-radius:var(--r-lg,14px);padding:22px;position:sticky;top:96px}
 .co-summary h3{margin:0 0 14px;font-size:1.05rem}
@@ -1351,6 +1357,14 @@ h1 .gya-st { font-size: .8rem; margin-left: 8px; }
 .gya-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 16px; align-items: start; }
 @media (max-width: 800px) { .gya-grid3 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 520px) { .gya-grid3 { grid-template-columns: 1fr; } }
+.gya-fs { border: 0; padding: 0; margin: 0 0 14px; } .gya-fs legend { font-weight: 700; font-size: .88rem; margin-bottom: 6px; padding: 0; }
+.gya-radio { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border: 1.5px solid var(--g-line); border-radius: var(--g-r); margin: 0 0 6px; cursor: pointer; font-size: .88rem; }
+.gya-radio:has(input:checked) { border-color: var(--g-ink); } .gya-radio input { margin-top: 2px; width: 17px; height: 17px; accent-color: var(--g-ink); }
+.gya-radio small { display: block; color: var(--g-ink3); font-size: .8rem; margin-top: 2px; }
+.gya-affix { display: flex; align-items: center; gap: 6px; max-width: 220px; } .gya-affix .gya-in { flex: 1; min-width: 0; } .gya-affix > span { font-weight: 700; color: var(--g-ink3); }
+.gya-dc-pick { border: 1.5px solid var(--g-line); border-radius: var(--g-r); padding: 10px; margin: -4px 0 14px; } .gya-dc-pick .gya-in { max-width: 260px; }
+.gya-dc-plist { max-height: 260px; overflow: auto; display: flex; flex-direction: column; margin-top: 8px; } .gya-dc-plist .gya-check { margin: 3px 0; }
+.gya-dc-help li { margin: 0 0 6px; }
 .gya-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1.5px solid var(--g-line); margin: 0 0 16px; }
 .gya-tabs button { background: none; border: 0; border-bottom: 2.5px solid transparent; margin-bottom: -1.5px; padding: 9px 12px; font: inherit; font-size: .9rem; cursor: pointer; color: var(--g-ink3); }
 .gya-tabs button.on { color: var(--g-ink); border-bottom-color: var(--g-ink); font-weight: 600; }
@@ -2499,7 +2513,7 @@ const GYA = (() => {
       if (/sign in again/i.test(e.message)) { clearSession(); location.hash = '#/login?next=' + encodeURIComponent(location.hash); } }
   }
   // sidebar grouped like an operator portal; sections can set their own group
-  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
+  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', discounts: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
     customers: 'Customers', campaigns: 'Marketing', segments: 'Marketing', automations: 'Marketing', emaillog: 'Marketing',
     blog: 'Content', pages: 'Content', content: 'Content', seo: 'Content', media: 'Content', settings: 'Account' };
   function navHtml(current) {
@@ -3121,7 +3135,9 @@ const GYA = (() => {
               ${i.artwork ? `<div class="gya-art">${i.artwork.design ? `<span>Design: ${esc(i.artwork.design)}</span>` : ''}${i.artwork.later ? '<span class="gya-warn-t">Waiting for artwork: customer is supplying it later (upload link emailed)</span>' : ''}${i.artwork.supplied_after ? `<span class="gya-muted">Artwork uploaded by the customer ${dtt(i.artwork.supplied_after)}</span>` : ''}
                 ${(i.artwork.files || []).map(f => `<span>${esc(f.side)}: ${esc(f.name)} ${f.path ? `<button class="gya-btn gya-btn-line gya-btn-sm" data-dl="${esc(f.path)}">Download</button>` : '<em class="gya-warn-t">not uploaded</em>'}${f.info ? `<small class="gya-muted"> ${esc(f.info)}</small>` : ''}</span>`).join('')}</div>` : ''}</td>
               <td>${i.qty}</td><td>${$c(i.unit_cents)}</td><td>${$c(i.line_cents)}</td></tr>`).join('')}
+            ${o.product_discount_cents ? `<tr><td colspan="3">Product discount <span class="gya-muted">(code ${esc(o.discount_code || '')})</span></td><td>-${$c(o.product_discount_cents)}</td></tr>` : ''}
             <tr><td colspan="3">Delivery${o.delivery_method ? `<div class="gya-muted">${esc(o.delivery_method)}</div>` : ''}${o.delivery_quote_required ? '<div class="gya-warn-t">Some items need a courier quote</div>' : ''}</td><td>${$c(o.delivery_cents)}</td></tr>
+            ${o.shipping_discount_cents ? `<tr><td colspan="3">Shipping discount <span class="gya-muted">(code ${esc(o.discount_code || '')})</span></td><td>-${$c(o.shipping_discount_cents)}</td></tr>` : ''}
             <tr><td colspan="3"><b>Total (AUD)</b><div class="gya-muted">Includes GST of ${$c(o.gst_cents)}</div></td><td><b>${$c(o.total_cents)}</b></td></tr></tbody></table></div></section>
           <section class="gya-card"><h3>Timeline</h3><ol class="gya-timeline">${timeline}</ol>
             <div class="gya-row" style="margin-top:10px"><input class="gya-in" id="odNote" placeholder="Add a note"><button class="gya-btn gya-btn-line" id="odNoteBtn">Add note</button></div>
@@ -3134,7 +3150,7 @@ const GYA = (() => {
             ${o.customer_id ? `<a class="gya-link" href="#/admin/customers/${o.customer_id}">Customer record →</a>` : ''}</section>
           <section class="gya-card"><h3>Payment</h3><dl class="gya-dl"><dt>Provider</dt><dd>${esc({ stripe: 'Stripe', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '')}</dd>
             <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
-            <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
+            <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.discount_code ? `<dt>Discount code</dt><dd>${o.discount_code_id ? `<a class="gya-link" href="#/admin/discounts/${o.discount_code_id}">${esc(o.discount_code)}</a>` : esc(o.discount_code)} · ${o.discount_type === 'percent' ? `${Number(o.discount_value)}%` : $c(Math.round(Number(o.discount_value) * 100))} off ${o.discount_applies_to === 'shipping' ? 'shipping' : 'products'}<br><span class="gya-muted">Saved the customer ${$c((o.product_discount_cents || 0) + (o.shipping_discount_cents || 0))}</span></dd>` : ''}${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
             ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
           <div id="odShipCard"></div>
           <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
@@ -3185,6 +3201,137 @@ const GYA = (() => {
     shOrderCard(o).then(h => { const box = qs('#odShipCard', main); if (!box || !h) return; box.innerHTML = h; shOrderWire(main, o, () => orderDetail(main, id)); }).catch(() => {});
   }
   G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
+
+  /* ---------------- Discount codes ----------------
+     Codes are checked and worked out on the shop server; this page only sets them up. One code per order. */
+  const DC = { q: '' };
+  const DC_ST = { Active: 'ok', Scheduled: 'info', Expired: 'done', Inactive: 'off', 'Used up': 'wait' };
+  const dcPill = s => `<span class="gya-st gya-st-${DC_ST[s] || 'off'}">${esc(s)}</span>`;
+  const dcDay = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  const dcValue = c => c.kind === 'percent' ? `${Number(c.percent).toLocaleString('en-AU', { maximumFractionDigits: 2 })}% off` : `${$c(c.amount_cents)} off`;
+  const dcApplies = c => c.applies_to === 'shipping' ? 'Shipping' : c.product_scope === 'selected' ? `${(c.product_slugs || []).length} selected product${(c.product_slugs || []).length === 1 ? '' : 's'}` : 'All products';
+  const dcDates = c => c.start_date && c.end_date ? `${dcDay(c.start_date)} to ${dcDay(c.end_date)}` : c.start_date ? `From ${dcDay(c.start_date)}` : c.end_date ? `Until ${dcDay(c.end_date)}` : 'No dates';
+  const dcUses = c => c.usage_limit ? `${c.uses} / ${c.usage_limit}` : `${c.uses} <span class="gya-muted">(no limit)</span>`;
+  const dcDemo = main => { main.innerHTML = head('Discounts', 'Discount codes for shipping or products.') + '<p class="gya-note">Discount codes are checked on the shop server, so they are not part of this demo. On the live dashboard this page lists your codes and lets you create, edit and switch them off.</p>'; };
+  const dcNotReady = r => !r.ready ? `<p class="gya-warn">Discount codes are not set up in the database yet. Run the discount codes SQL file in Supabase (see the README), then reload this page.</p>`
+    : !r.enabled ? `<p class="gya-warn">The code box is switched off on the shop (DISCOUNTS_ENABLED is not true in Vercel), so customers can't use codes yet. You can still set codes up here.</p>` : '';
+
+  async function discountList(main) {
+    if (window.GYA_DEMO) return dcDemo(main);
+    const r = await server('discount-list', {});
+    if (!r.ready) { main.innerHTML = head('Discounts', 'Discount codes for shipping or products.') + dcNotReady(r); return; }
+    main.innerHTML = head('Discounts', 'Codes customers type at checkout. One code per order.', '<a class="gya-btn gya-btn-red" href="#/admin/discounts/new">New code</a>') + dcNotReady(r) + `
+      <div class="gya-filters"><input class="gya-in gya-search" id="dcQ" placeholder="Search codes or descriptions" aria-label="Search codes"></div>
+      <section class="gya-card gya-pad0"><div id="dcList"></div></section>`;
+    const draw = () => {
+      const t = DC.q.trim().toLowerCase();
+      const rows = r.codes.filter(c => !t || c.code.toLowerCase().includes(t) || String(c.description || '').toLowerCase().includes(t));
+      qs('#dcList', main).innerHTML = !r.codes.length ? empty('No codes yet. Press New code to create the first one.') : !rows.length ? empty('No codes match your search.')
+        : `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Code</th><th>Applies to</th><th>Discount</th><th>Uses</th><th>Status</th><th>Dates</th></tr></thead><tbody>
+          ${rows.map(c => `<tr class="gya-click" data-href="#/admin/discounts/${c.id}"><td><a href="#/admin/discounts/${c.id}"><b>${esc(c.code)}</b></a>${c.description ? `<div class="gya-muted gya-small">${esc(c.description)}</div>` : ''}</td>
+            <td>${dcApplies(c)}</td><td>${dcValue(c)}${c.min_subtotal_cents ? `<div class="gya-muted gya-small">Orders of ${$c(c.min_subtotal_cents)} or more</div>` : ''}</td><td>${dcUses(c)}</td><td>${dcPill(c.status)}</td><td>${dcDates(c)}</td></tr>`).join('')}</tbody></table></div>`;
+      clickRows(main);
+    };
+    const q = qs('#dcQ', main); q.value = DC.q; q.oninput = () => { DC.q = q.value; draw(); };
+    draw();
+  }
+
+  async function discountEdit(main, id) {
+    if (window.GYA_DEMO) return dcDemo(main);
+    const isNew = id === 'new';
+    const [got, products, list] = await Promise.all([isNew ? null : server('discount-get', { id }), rest('products?select=slug,name,category_slug,published&order=name'), server('discount-list', {})]);
+    if (!list.ready) { main.innerHTML = head('Discounts') + dcNotReady(list); return; }
+    const c = got ? got.code : { code: '', description: '', applies_to: 'shipping', product_scope: 'all', product_slugs: [], kind: 'percent', percent: null, amount_cents: null,
+      min_subtotal_cents: null, start_date: null, end_date: null, usage_limit: null, per_email_limit: null, active: true, uses: 0 };
+    const used = got ? got.orders : [];
+    const picked = new Set(c.product_slugs || []);
+    const dollars = v => v == null ? '' : (v / 100).toFixed(2);
+    const radio = (name, val, cur, label, sub = '') => `<label class="gya-radio"><input type="radio" name="${name}" value="${val}" ${val === cur ? 'checked' : ''}><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span></label>`;
+    main.innerHTML = head(isNew ? 'New discount code' : `${esc(c.code)} ${dcPill(c.status)}`, '<a class="gya-link" href="#/admin/discounts">Back to discounts</a>') + dcNotReady(list) + `
+      <div class="gya-grid2 gya-dc">
+        <div>
+          <section class="gya-card" id="dcForm"><h3>Code details</h3>
+            ${ui.field('Code', ui.text('code', c.code, `maxlength="32" autocomplete="off" spellcheck="false" style="text-transform:uppercase" ${c.uses > 0 ? 'readonly' : ''}`),
+              c.uses > 0 ? 'This code has been used, so it can\'t be renamed. Switch it off and create a new code instead.' : 'What the customer types at checkout. Letters and numbers only, for example SAVE10. Customers can type it in capitals or lower case.')}
+            ${ui.field('Description (only staff see this)', ui.text('description', c.description || '', 'maxlength="500" placeholder="For example: Newsletter offer, November"'))}
+            <fieldset class="gya-fs"><legend>What does the code take money off?</legend>
+              ${radio('applies_to', 'shipping', c.applies_to, 'Shipping', 'Takes money off the delivery price.')}
+              ${radio('applies_to', 'products', c.applies_to, 'Products', 'Takes money off the products in the cart.')}</fieldset>
+            <div id="dcScope"><fieldset class="gya-fs"><legend>Which products?</legend>
+              ${radio('product_scope', 'all', c.product_scope, 'All products')}
+              ${radio('product_scope', 'selected', c.product_scope, 'Only the products I choose')}</fieldset>
+              <div id="dcPicker" class="gya-dc-pick"><div class="gya-row gya-between"><input class="gya-in" id="dcPq" placeholder="Search products" aria-label="Search products"><span class="gya-muted gya-small" id="dcPn"></span></div>
+                <div class="gya-dc-plist" id="dcPlist"></div></div></div>
+            <fieldset class="gya-fs"><legend>How much off?</legend>
+              ${radio('kind', 'percent', c.kind, 'A percentage', 'For example 10% off.')}
+              ${radio('kind', 'amount', c.kind, 'A dollar amount', 'For example $10 off. On selected products it comes off once per order, not per item.')}</fieldset>
+            <div id="dcPct">${ui.field('Percentage off', `<div class="gya-affix">${ui.text('percent', c.percent == null ? '' : String(c.percent), 'inputmode="decimal" placeholder="10"')}<span>%</span></div>`, 'More than 0 and up to 100. Use 100 for free shipping.')}</div>
+            <div id="dcAmt">${ui.field('Dollar amount off (including GST)', `<div class="gya-affix gya-affix-l"><span>$</span>${ui.text('amount', dollars(c.amount_cents), 'inputmode="decimal" placeholder="10.00"')}</div>`, 'A discount never takes off more than the shipping or products it applies to.')}</div>
+          </section>
+          <section class="gya-card"><h3>Rules (all optional)</h3>
+            ${ui.field('Minimum order', `<div class="gya-affix gya-affix-l"><span>$</span>${ui.text('min_subtotal', dollars(c.min_subtotal_cents), 'inputmode="decimal" placeholder="No minimum"')}</div>`, 'The products subtotal (before any discount and shipping) the order must reach. Leave empty for no minimum.')}
+            <div class="gya-grid2">${ui.field('Start date', `<input class="gya-in" type="date" name="start_date" value="${esc(c.start_date || '')}">`, 'Works from the start of this day, Sydney time.')}
+              ${ui.field('End date', `<input class="gya-in" type="date" name="end_date" value="${esc(c.end_date || '')}">`, 'Works until the end of this day, Sydney time.')}</div>
+            <div class="gya-grid2">${ui.field('Total uses', ui.text('usage_limit', c.usage_limit || '', 'inputmode="numeric" placeholder="No limit"'), 'How many paid orders can use it in total.')}
+              ${ui.field('Uses per customer', ui.text('per_email_limit', c.per_email_limit || '', 'inputmode="numeric" placeholder="No limit"'), 'Counted by email address.')}</div>
+            <div class="gya-checks">${ui.check('active', c.active !== false, 'Switched on (customers can use it)')}</div>
+            <div class="gya-row"><button class="gya-btn gya-btn-red" id="dcSave">${isNew ? 'Create code' : 'Save changes'}</button><a class="gya-btn gya-btn-line" href="#/admin/discounts">Cancel</a></div>
+          </section>
+        </div>
+        <div>
+          ${isNew ? `<section class="gya-card"><h3>How codes work</h3><ul class="gya-mini gya-dc-help"><li>Customers enter the code at checkout, under Delivery.</li><li>One code per order. A new code replaces the old one.</li>
+            <li>A code is only counted as used once the order is paid.</li><li>Prices include GST, so the discount comes off the GST-inclusive price and GST is worked out on what's left.</li></ul></section>` : `
+          <section class="gya-card"><h3>Switch on or off</h3><p>${c.active ? 'Customers can use this code while it is in its dates and under its limits.' : 'This code is switched off. Customers who type it are told it isn\'t valid.'}</p>
+            <div class="gya-row"><button class="gya-btn gya-btn-line" id="dcToggle">${c.active ? 'Switch off (deactivate)' : 'Switch on again'}</button>
+              ${c.uses > 0 ? '' : '<button class="gya-btn gya-btn-line" id="dcDelete">Delete code</button>'}</div>
+            ${c.uses > 0 ? '<p class="gya-muted gya-small">Used codes can\'t be deleted because orders refer to them. Switch it off instead.</p>' : ''}</section>
+          <section class="gya-card"><h3>Orders that used it <span class="gya-muted" style="font-weight:400">· ${c.uses}${c.usage_limit ? ` of ${c.usage_limit}` : ''}</span></h3>
+            ${used.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Discount</th><th>Total</th></tr></thead><tbody>
+              ${used.map(u => `<tr class="gya-click" data-href="#/admin/orders/${u.order_id}"><td><a href="#/admin/orders/${u.order_id}">${esc(u.order ? u.order.number : 'Order')}</a><div class="gya-muted gya-small">${dtt(u.created_at)}</div></td>
+                <td>${esc(u.order && u.order.name || '')}<div class="gya-muted gya-small">${esc(u.email || '')}</div></td><td>-${$c((u.product_discount_cents || 0) + (u.shipping_discount_cents || 0))}</td><td>${u.order ? $c(u.order.total_cents) : ''}</td></tr>`).join('')}</tbody></table></div>`
+              : empty('No paid orders have used this code yet.')}</section>`}
+        </div></div>`;
+    const f = qs('#dcForm', main).parentNode.parentNode;
+    const val = n => { const el = qs(`[name=${n}]`, f); return el ? el.value.trim() : ''; };
+    const checked = n => { const el = qs(`[name=${n}]:checked`, f); return el ? el.value : ''; };
+    const show = () => {
+      const prod = checked('applies_to') === 'products';
+      qs('#dcScope', f).hidden = !prod; qs('#dcPicker', f).hidden = !(prod && checked('product_scope') === 'selected');
+      qs('#dcPct', f).hidden = checked('kind') !== 'percent'; qs('#dcAmt', f).hidden = checked('kind') !== 'amount';
+    };
+    const drawPicker = () => {
+      const t = qs('#dcPq', f).value.trim().toLowerCase();
+      const known = new Set(products.map(p => p.slug)), gone = [...picked].filter(s => !known.has(s));
+      const rows = products.filter(p => !t || p.name.toLowerCase().includes(t) || p.slug.includes(t)).sort((a, b) => picked.has(b.slug) - picked.has(a.slug));   // ticked ones first
+      qs('#dcPlist', f).innerHTML = (rows.length ? rows.map(p => `<label class="gya-check"><input type="checkbox" data-slug="${esc(p.slug)}" ${picked.has(p.slug) ? 'checked' : ''}><span>${esc(p.name)}${p.published === false ? ' <em class="gya-muted">(hidden)</em>' : ''}</span></label>`).join('') : '<p class="gya-muted gya-small">No products match.</p>')
+        + gone.map(s => `<label class="gya-check"><input type="checkbox" data-slug="${esc(s)}" checked><span>${esc(s)} <em class="gya-muted">(product no longer exists)</em></span></label>`).join('');
+      qs('#dcPn', f).textContent = `${picked.size} selected`;
+      qsa('[data-slug]', f).forEach(x => x.onchange = () => { x.checked ? picked.add(x.dataset.slug) : picked.delete(x.dataset.slug); qs('#dcPn', f).textContent = `${picked.size} selected`; G.markDirty(); });
+    };
+    qs('#dcPq', f).oninput = drawPicker;
+    qsa('input[type=radio]', f).forEach(x => x.onchange = () => { show(); G.markDirty(); });
+    qsa('#dcForm input, #dcForm ~ section input', main).forEach(x => { if (x.type !== 'radio' && !x.dataset.slug && x.id !== 'dcPq') x.addEventListener('input', () => G.markDirty()); });
+    const codeIn = qs('[name=code]', f); codeIn.addEventListener('input', () => { const p = codeIn.selectionStart; codeIn.value = codeIn.value.toUpperCase().replace(/\s/g, ''); try { codeIn.setSelectionRange(p, p); } catch (e) {} });
+    show(); drawPicker();
+    qs('#dcSave', main).onclick = e => busy(e.target, async () => {
+      const body = { id: isNew ? undefined : c.id, code: val('code'), description: val('description'), applies_to: checked('applies_to'), product_scope: checked('product_scope'),
+        product_slugs: [...picked], kind: checked('kind'), percent: val('percent').replace(/%$/, ''), amount: val('amount'), min_subtotal: val('min_subtotal'),
+        start_date: val('start_date'), end_date: val('end_date'), usage_limit: val('usage_limit'), per_email_limit: val('per_email_limit'), active: qs('[name=active]', f).checked };
+      const r = await server('discount-save', body);
+      G.markClean(); toast(isNew ? `${r.code.code} created` : `${r.code.code} saved`);
+      if (isNew) location.hash = `#/admin/discounts/${r.code.id}`; else discountEdit(main, c.id);
+    });
+    clickRows(main);
+    const tg = qs('#dcToggle', main); if (tg) tg.onclick = e => {
+      if (c.active && !confirm(`Switch off ${c.code}? Customers who type it will be told it isn't valid. You can switch it on again later.`)) return;
+      busy(e.target, async () => { await server('discount-active', { id: c.id, active: !c.active }); toast(`${c.code} switched ${c.active ? 'off' : 'on'}`); discountEdit(main, c.id); });
+    };
+    const dl = qs('#dcDelete', main); if (dl) dl.onclick = e => {
+      if (!confirm(`Delete ${c.code}? This can't be undone.`)) return;
+      busy(e.target, async () => { await server('discount-delete', { id: c.id }); G.markClean(); toast(`${c.code} deleted`); location.hash = '#/admin/discounts'; });
+    };
+  }
+  G.section({ id: 'discounts', label: 'Discounts', order: 6, render: (main, sub) => sub[0] ? discountEdit(main, sub[0]) : discountList(main) });
 
   /* ---------------- Shipping calculator: settings, simulator, profitability ----------------
      Settings are edited here as a draft and saved as a new version (the server validates them).
@@ -4896,7 +5043,7 @@ function campaignRef(){ try{ const c=JSON.parse(localStorage.getItem('avanti.cam
 async function apiCall(path, body){
   const r = await fetch(API_BASE+path, body===undefined?{}:{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   let d={}; try{ d=await r.json(); }catch(e){}
-  if(!r.ok) throw new Error(d.error||'Something went wrong. Please try again.');
+  if(!r.ok){ const e=new Error(d.error||'Something went wrong. Please try again.'); e.data=d; throw e; }
   return d;
 }
 const cartForServer = () => cart.lines.map(l=>({slug:l.slug, qty:l.qty, opts:l.opts, art:l.art?{later:!!l.art.later, design:l.art.design||null, files:(l.art.files||[]).map(f=>({side:f.side, name:f.name, info:f.info||'', path:f.path||null, size:f.size||null, copy:!!f.copy}))}:null}));
@@ -4917,7 +5064,7 @@ function pageCheckout(params){
       <div class="co-three">${inp('coSuburb','Suburb','autocomplete="address-level2" required')}
         <div><label for="coState">State</label><select id="coState" autocomplete="address-level1" required><option value="">Choose</option>${STATES_AU.map(s=>`<option>${s}</option>`).join('')}</select></div>
         ${inp('coPostcode','Postcode','inputmode="numeric" maxlength="4" pattern="\\d{4}" autocomplete="postal-code" required')}</div>
-      <h3>Delivery</h3><div id="coDelivery"><p class="co-muted">Loading delivery options…</p></div>
+      <h3>Delivery</h3><div id="coDelivery"><p class="co-muted">Loading delivery options…</p></div><div id="coDiscount"></div>
       <h3>Anything we should know? <span class="co-opt">optional</span></h3>
       <div><textarea id="coNote" rows="3" placeholder="Delivery instructions, event date, artwork notes…"></textarea></div>
       <label class="co-check"><input type="checkbox" id="coOptin"><span>Email me news and offers from Avanti Print &amp; Design. You can unsubscribe at any time.</span></label>
@@ -4947,11 +5094,41 @@ async function wireCheckout(params){
     ? `The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} didn't reach us. Please remove ${lost.length>1?'those items':'that item'} from your cart and add ${lost.length>1?'them':'it'} again with the file, or choose “supply artwork later”. Then you can pay.`
     : `The artwork file${lost.length>1?'s':''} for ${lost.map(l=>esc(prod(l.slug).n)).join(', ')} couldn't be kept when the page reloaded. You can pay now and email the artwork afterwards, or remove the item and add it again with the file.`, !!mustFix);
   let q=null, cfg=null, ship=null, shipFor='';
-  // Delivery: one "Standard Delivery" price for the customer's postcode (worked out on the server)
-  const totals=()=>{ if(!q) return; const del=ship&&ship.ok?ship.inc_gst_cents:0, total=q.subtotal_cents+del;
+  let code='', codeMsg='', codeBad=false;   // the discount code the server has accepted for this order (one per order)
+  // Delivery: one "Standard Delivery" price for the customer's postcode. Every figure below comes from the
+  // server's quote (discounts included); nothing is added up in the browser.
+  const totals=()=>{ if(!q) return; const dc=q.discount&&q.discount.ok?esc(q.discount.code):'';
     $('#coTotals').innerHTML=`<div class="co-row"><span>Subtotal</span><span>${cents$(q.subtotal_cents)}</span></div>
-      <div class="co-row"><span>Standard Delivery</span><span>${ship&&ship.ok?cents$(del):'–'}</span></div>
-      <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(total)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(Math.round(q.subtotal_cents/11)+(ship&&ship.ok?ship.gst_cents:0))}</div>`; };
+      ${q.product_discount_cents?`<div class="co-row co-disc"><span>Product discount (${dc})</span><span>-${cents$(q.product_discount_cents)}</span></div>`:''}
+      <div class="co-row"><span>Standard Delivery</span><span>${ship&&ship.ok?cents$(q.delivery_cents):'–'}</span></div>
+      ${q.shipping_discount_cents?`<div class="co-row co-disc"><span>Shipping discount (${dc})</span><span>-${cents$(q.shipping_discount_cents)}</span></div>`:''}
+      ${!(ship&&ship.ok)&&q.delivery_cents ? `<div class="co-row co-total"><span>Total (AUD)</span><span>…</span></div>`
+        : `<div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(q.total_cents)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(q.gst_cents)}</div>`}`; };
+  const codeHtml=()=> `<div class="co-code">${code ? `<div class="co-code-on"><span><b>${esc(code)}</b> applied${q&&q.discount&&q.discount.shipping_pending?' · the shipping discount shows once delivery is worked out':''}</span><button type="button" class="btn btn-line btn-sm" id="coCodeRemove">Remove</button></div>` : ''}
+    <label for="coCode"${code?' class="co-code-2"':''}>${code?'Have a different code?':'Have a discount code?'}</label><div class="co-code-row"><input id="coCode" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" placeholder="Enter code"><button type="button" class="btn btn-line" id="coCodeApply">Apply</button></div>
+    ${codeMsg?`<p class="co-code-msg${codeBad?' bad':''}" role="status">${codeMsg}</p>`:''}</div>`;
+  const drawCode=()=>{ const box=$('#coDiscount'); if(!box||!cfg||!cfg.discounts) return; box.innerHTML=codeHtml();
+    const a=$('#coCodeApply'), inp=$('#coCode'), rm=$('#coCodeRemove');
+    if(a) a.onclick=()=>applyCode(inp.value);
+    if(inp) inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCode(inp.value); } };
+    if(rm) rm.onclick=()=>{ code=''; codeMsg='Discount code removed.'; codeBad=false; requote(); }; };
+  // ask the server for the totals again (same postcode, current code)
+  let qChain=Promise.resolve();
+  const quoteCall=mk=>{ const p=qChain.then(()=>apiCall('/checkout?action=quote', mk())); qChain=p.catch(()=>{}); return p; };
+  const quoteBody=(extra={})=>{ const pc=$('#coPostcode').value.trim(); return { lines:cartForServer(), ...(/^\d{4}$/.test(pc)?{postcode:pc}:{}), ...(code?{discount_code:code}:{}), ...(($('#coEmail').value||'').includes('@')?{email:$('#coEmail').value}:{}), ...extra }; };
+  // a code the server no longer accepts (for example it expired a moment ago) is taken off, with its message
+  const checkCodeStill=r=>{ if(code && r.discount && !r.discount.ok){ codeMsg=`${esc(r.discount.message)}, so ${esc(code)} has been removed.`; codeBad=true; code=''; return false; } return true; };
+  const requote=async()=>{ try{ const r=await quoteCall(()=>quoteBody()); if(!live()) return; if(!checkCodeStill(r)){ return requote(); } q=r; if(r.shipping&&!r.shipping.needs_postcode) ship=r.shipping; }
+    catch(e){ if(!live()) return; codeMsg=esc(e.message); codeBad=true; } drawCode(); $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=!canPay(); };
+  const applyCode=async raw=>{ const want=String(raw||'').trim().toUpperCase(); if(!want){ codeMsg='Enter a code first.'; codeBad=true; drawCode(); return; }
+    if(want===code){ codeMsg=`${esc(code)} is already applied.`; codeBad=false; drawCode(); return; }
+    const btn=$('#coCodeApply'); if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+    try{ const r=await quoteCall(()=>quoteBody({ discount_code:want })); if(!live()) return;
+      if(r.discount&&r.discount.ok){ const old=code; code=r.discount.code; q=r; if(r.shipping&&!r.shipping.needs_postcode) ship=r.shipping;
+        codeMsg = old ? `${esc(code)} has replaced ${esc(old)}. Only one code can be used per order.` : `${esc(code)} applied.`; codeBad=false; }
+      else { codeMsg = esc((r.discount&&r.discount.message)||"That code isn't valid") + (code?`. ${esc(code)} is still applied.`:'.'); codeBad=true; }
+    }catch(e){ codeMsg=esc(e.message); codeBad=true; }
+    drawCode(); totals(); $('#coSubmit').disabled=!canPay(); };
   const shipHtml=()=> !ship||ship.needs_postcode ? '<p class="co-muted">Enter your delivery postcode above to see the delivery price.</p>'
     : ship.loading ? '<p class="co-muted">Working out delivery…</p>'
     : ship.ok ? `<fieldset class="co-radios"><label><input type="radio" name="delivery" value="standard" checked><span>Standard Delivery</span><b>${cents$(ship.inc_gst_cents)}</b></label></fieldset><p class="co-muted co-small">${cents$(ship.ex_gst_cents)} + GST ${cents$(ship.gst_cents)}. We'll email you tracking when it's on its way.</p>`
@@ -4961,20 +5138,20 @@ async function wireCheckout(params){
   // (a click that blurs the postcode box would otherwise be lost) and the submit handler waits for it.
   let shipP=Promise.resolve(), shownFor='';
   const refreshShip=()=>{ const pc=$('#coPostcode').value.trim();
-    if(!/^\d{4}$/.test(pc)){ ship=null; shipFor=''; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=true; return Promise.resolve(); }
+    if(!/^\d{4}$/.test(pc)){ const had=shipFor; ship=null; shipFor=''; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=true; if(had&&q&&q.delivery_cents) requote(); return Promise.resolve(); }
     if(pc===shipFor && ship) return ship.loading ? shipP : Promise.resolve();
     shipFor=pc; ship={loading:true}; $('#coDelivery').innerHTML=shipHtml(); $('#coSubmit').disabled=!!mustFix;
     return shipP=(async()=>{
-      try{ const r=await apiCall('/checkout?action=quote', {lines:cartForServer(), postcode:pc}); if(!live()||pc!==shipFor) return; q=r; ship=r.shipping; }
+      try{ const r=await quoteCall(()=>quoteBody({postcode:pc})); if(!live()||pc!==shipFor) return; if(!checkCodeStill(r)) drawCode(); q=r; ship=r.shipping; }
       catch(e){ if(!live()||pc!==shipFor) return; ship={ok:false, message:e.message}; }
-      shownFor=pc; $('#coDelivery').innerHTML=shipHtml(); totals(); $('#coSubmit').disabled=!canPay(); })(); };
+      shownFor=pc; $('#coDelivery').innerHTML=shipHtml(); drawCode(); totals(); $('#coSubmit').disabled=!canPay(); })(); };
   try{ cfg = await apiCall('/checkout?action=config'); }catch(e){ if(live()) offline(); return; }
   if(!live()) return;
   if(!cfg.providers || !cfg.providers.length){ offline(); return; }
   try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ if(!live()) return; $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
   if(!live()) return;
   q.lines.forEach((l,i)=>{ const el=$$('#coLines .co-price')[i]; if(el) el.textContent=cents$(l.line_cents); });
-  $('#coDelivery').innerHTML=shipHtml(); totals();
+  $('#coDelivery').innerHTML=shipHtml(); drawCode(); totals();
   let shipT; $('#coPostcode').addEventListener('input',()=>{ clearTimeout(shipT); shipT=setTimeout(refreshShip, 350); });
   $('#coPostcode').addEventListener('change', refreshShip);
   $('#coPay').innerHTML = `<fieldset class="co-radios">${cfg.providers.map((p,i)=>`<label><input type="radio" name="provider" value="${p.id}" ${i===0?'checked':''}><span>${esc(p.label)}</span>${p.test?'<b class="co-test">TEST MODE</b>':''}</label>`).join('')}</fieldset>`;
@@ -4993,9 +5170,11 @@ async function wireCheckout(params){
       const r = await apiCall('/checkout?action=create', { provider:f.querySelector('input[name=provider]:checked').value, lines,
         customer:{ email:$('#coEmail').value, name:$('#coName').value, phone:$('#coPhone').value, company:$('#coCompany').value,
           address:{ line1:$('#coLine1').value, line2:$('#coLine2').value, suburb:$('#coSuburb').value, state:$('#coState').value, postcode:$('#coPostcode').value } },
-        note:$('#coNote').value, marketing_opt_in:$('#coOptin').checked, campaign_id:campaignRef() });
+        note:$('#coNote').value, marketing_opt_in:$('#coOptin').checked, campaign_id:campaignRef(), ...(code?{discount_code:code}:{}) });
       location.href = r.redirect_url;
-    }catch(err){ note(esc(err.message), true); btn.disabled=false; btn.textContent='Pay securely'; }
+    }catch(err){ btn.textContent='Pay securely';
+      if(err.data&&err.data.discount_error){ codeMsg=`${esc(err.message.replace(/\. Please remove it and try again\.$/,''))}, so ${esc(code)} has been removed. Please check the new total, then press Pay again.`; codeBad=true; code=''; await requote(); note(codeMsg, true); return; }
+      note(esc(err.message), true); btn.disabled=false; }
   };
 }
 
@@ -5065,7 +5244,9 @@ async function wireOrder(id, params){
     $('#ordBody').innerHTML = `${done.includes(o.status)?`<ol class="ord-steps">${ORDER_STEPS.map((s,i)=>`<li class="${i<=at?'on':''}"><span>${i+1}</span>${s[1]}</li>`).join('')}</ol>`:''}
       ${o.tracking_url||o.tracking_number?`<div class="co-note">Sent with ${esc(o.carrier||'our courier')}${o.tracking_number?`, tracking number <b>${esc(o.tracking_number)}</b>`:''}. ${o.tracking_url?`<a href="${esc(o.tracking_url)}" target="_blank" rel="noopener">Track your delivery</a>`:''}</div>`:''}
       <div class="co-summary ord-sum"><h3>Order ${esc(o.number)}</h3>${o.items.map(i=>`<div class="co-row"><span><b>${esc(i.name)}</b> × ${i.qty}${Object.keys(i.options||{}).length?`<br><small class="co-muted">${Object.values(i.options).map(esc).join(' · ')}</small>`:''}${i.artwork_later?'<br><small class="co-muted">Artwork to follow</small>':(i.artwork_files||[]).length?`<br><small class="co-muted">Artwork: ${(i.artwork_files||[]).map(esc).join(', ')}</small>`:''}</span><span>${cents$(i.line_cents)}</span></div>`).join('')}
+      ${o.product_discount_cents?`<div class="co-row co-disc"><span>Product discount (${esc(o.discount_code||'')})</span><span>-${cents$(o.product_discount_cents)}</span></div>`:''}
       <div class="co-row"><span>Delivery${o.delivery_method?`<br><small class="co-muted">${esc(o.delivery_method)}</small>`:''}</span><span>${cents$(o.delivery_cents)}</span></div>
+      ${o.shipping_discount_cents?`<div class="co-row co-disc"><span>Shipping discount (${esc(o.discount_code||'')})</span><span>-${cents$(o.shipping_discount_cents)}</span></div>`:''}
       <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(o.total_cents)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(o.gst_cents)}</div>
       ${o.delivery_quote_required?'<p class="co-muted co-small">Courier delivery for some items will be quoted separately before dispatch.</p>':''}</div>
       ${artUploadHtml(o)}

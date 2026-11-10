@@ -1,6 +1,7 @@
 // Stripe Checkout and PayPal Orders v2, over their REST APIs.
 import crypto from 'node:crypto';
 import { HttpError, dollars } from './core.js';
+import { allocate } from './discounts.js';
 
 // ---------------- Stripe ----------------
 function form(obj, prefix = '', out = []) {
@@ -22,19 +23,39 @@ async function stripe(cfg, method, path, params, idempotencyKey) {
   return data;
 }
 
+// Stripe Checkout has no negative lines, and we don't use Stripe coupon objects, so a discount is shown by
+// charging the discounted amount on the lines it applies to. A discounted product line becomes one line for
+// its whole quantity ("Foamboard × 3", discount code named in the description); the shipping line is charged
+// after its discount. The lines always add up to exactly the order total.
+export function stripeLines(q) {
+  const code = q.discount && q.discount.ok ? q.discount.code : null;
+  const off = code && q.productDiscount ? allocate(q.lines, q.discount.eligible || [], q.productDiscount) : q.lines.map(() => 0);
+  const items = [];
+  q.lines.forEach((l, i) => {
+    const desc = Object.values(l.options).join(' · ');
+    if (!off[i]) { items.push({ quantity: l.qty, price_data: { currency: 'aud', unit_amount: l.unit_cents,
+      product_data: { name: l.name.slice(0, 250), description: desc.slice(0, 500) || undefined } } }); return; }
+    const amount = l.line_cents - off[i];
+    if (amount <= 0) return;                                  // fully discounted: nothing to charge on this line
+    items.push({ quantity: 1, price_data: { currency: 'aud', unit_amount: amount, product_data: { name: `${l.name} × ${l.qty}`.slice(0, 250),
+      description: [desc, `Discount code ${code}: -$${dollars(off[i])}`].filter(Boolean).join(' · ').slice(0, 500) } } });
+  });
+  const ship = q.deliveryCents - (q.shippingDiscount || 0);
+  if (ship > 0) items.push({ quantity: 1, price_data: { currency: 'aud', unit_amount: ship, product_data: { name: 'Delivery',
+    description: [q.deliveryMethod, q.shippingDiscount ? `Discount code ${code}: -$${dollars(q.shippingDiscount)}` : null].filter(Boolean).join(' · ') || undefined } } });
+  return items;
+}
+
 export async function stripeCheckout(cfg, order, q) {
-  const items = q.lines.map(l => ({
-    quantity: l.qty,
-    price_data: { currency: 'aud', unit_amount: l.unit_cents,
-      product_data: { name: l.name.slice(0, 250), description: Object.values(l.options).join(' · ').slice(0, 500) || undefined } },
-  }));
-  if (q.deliveryCents > 0) items.push({ quantity: 1, price_data: { currency: 'aud', unit_amount: q.deliveryCents, product_data: { name: 'Delivery', description: q.deliveryMethod || undefined } } });
+  const items = stripeLines(q);
+  const sum = items.reduce((t, it) => t + it.quantity * it.price_data.unit_amount, 0);
+  if (sum !== q.total) throw new HttpError(500, 'Card payment could not be started. Please try again or choose PayPal.', { detail: `lines ${sum} != total ${q.total}` });
   const back = `${cfg.siteUrl}/#/order/${order.id}?t=${order.public_token}`;
   const session = await stripe(cfg, 'POST', '/v1/checkout/sessions', {
     mode: 'payment', currency: 'aud', customer_email: order.email, client_reference_id: order.id,
     line_items: Object.fromEntries(items.map((it, i) => [i, it])),
-    metadata: { order_id: order.id, order_number: order.number },
-    payment_intent_data: { metadata: { order_id: order.id, order_number: order.number }, description: `Order ${order.number}` },
+    metadata: { order_id: order.id, order_number: order.number, ...(order.discount_code ? { discount_code: order.discount_code } : {}) },
+    payment_intent_data: { metadata: { order_id: order.id, order_number: order.number, ...(order.discount_code ? { discount_code: order.discount_code } : {}) }, description: `Order ${order.number}` },
     success_url: `${back}&paid=1`, cancel_url: `${cfg.siteUrl}/#/checkout?cancelled=1`,
     locale: 'en',
   }, `checkout-${order.id}`);
@@ -84,8 +105,11 @@ export async function paypalCheckout(cfg, order, q) {
   const { ok, data } = await paypal(cfg, 'POST', '/v2/checkout/orders', {
     intent: 'CAPTURE',
     purchase_units: [{ reference_id: order.number, custom_id: order.id, invoice_id: order.number, description: `Order ${order.number}`,
+      // PayPal's own breakdown fields carry the discounts: total = items + shipping - discount - shipping discount
       amount: { currency_code: 'AUD', value: dollars(q.total), breakdown: {
-        item_total: { currency_code: 'AUD', value: dollars(q.subtotal) }, shipping: { currency_code: 'AUD', value: dollars(q.deliveryCents) } } },
+        item_total: { currency_code: 'AUD', value: dollars(q.subtotal) }, shipping: { currency_code: 'AUD', value: dollars(q.deliveryCents) },
+        ...(q.productDiscount ? { discount: { currency_code: 'AUD', value: dollars(q.productDiscount) } } : {}),
+        ...(q.shippingDiscount ? { shipping_discount: { currency_code: 'AUD', value: dollars(q.shippingDiscount) } } : {}) } },
       items }],
     payment_source: { paypal: { experience_context: { brand_name: cfg.brand.slice(0, 127), user_action: 'PAY_NOW', shipping_preference: 'NO_SHIPPING',
       locale: 'en-AU', return_url: ret, cancel_url: `${cfg.siteUrl}/#/checkout?cancelled=1` } } },

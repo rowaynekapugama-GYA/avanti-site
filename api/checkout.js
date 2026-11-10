@@ -5,6 +5,7 @@ import { stripeCheckout, paypalCheckout, paypalCapture, stripeSign } from './_li
 import { markPaid, receiveArtwork } from './_lib/effects.js';
 import { customerView } from './_lib/shipping/engine.js';
 import { receive } from './webhooks.js';
+import { discountsReady } from './_lib/discounts.js';
 
 const UPLOAD_OK = ['paid', 'in_production'];   // artwork can be added online until the order is dispatched
 
@@ -18,7 +19,12 @@ function providers(cfg) {
 
 export const GET = handle(async (req) => {
   const cfg = config(), u = new URL(req.url), action = u.searchParams.get('action');
-  if (action === 'config') return json({ providers: cfg.supabaseUrl && cfg.serviceKey ? providers(cfg) : [], currency: 'AUD' });
+  if (action === 'config') {
+    const connected = !!(cfg.supabaseUrl && cfg.serviceKey);
+    let discounts = false;   // the "Have a discount code?" box only shows when codes are switched on and the tables exist
+    if (connected) { try { discounts = await discountsReady(db(cfg), cfg); } catch (e) { discounts = false; } }
+    return json({ providers: connected ? providers(cfg) : [], currency: 'AUD', discounts });
+  }
 
   if (action === 'status') {
     const d = db(cfg), o = await loadOrder(d, u.searchParams.get('id') || '');
@@ -29,6 +35,7 @@ export const GET = handle(async (req) => {
         artwork_files: ((i.artwork && i.artwork.files) || []).filter(f => f.path).map(f => f.name) })),
       can_upload_artwork: UPLOAD_OK.includes(o.status),
       subtotal_cents: o.subtotal_cents, delivery_cents: o.delivery_cents, delivery_method: o.delivery_method, total_cents: o.total_cents, gst_cents: o.gst_cents,
+      discount_code: o.discount_code || null, product_discount_cents: o.product_discount_cents || 0, shipping_discount_cents: o.shipping_discount_cents || 0,
       delivery_quote_required: o.delivery_quote_required, carrier: o.carrier, tracking_number: o.tracking_number, tracking_url: trackingUrl(o) || null });
   }
 
@@ -91,6 +98,10 @@ export const POST = handle(async (req) => {
     const q = await quote(db(cfg), body);
     return json({ lines: q.lines.map(l => ({ slug: l.product_slug, name: l.name, qty: l.qty, unit_cents: l.unit_cents, line_cents: l.line_cents })),
       delivery_cents: q.deliveryCents, subtotal_cents: q.subtotal, total_cents: q.total, gst_cents: q.gst,
+      product_discount_cents: q.productDiscount, shipping_discount_cents: q.shippingDiscount,
+      // the code as the server sees it: applied (with what it takes off) or not usable (with the message)
+      discount: q.discount ? { code: q.discount.code, ok: q.discount.ok, message: q.discount.message || null, applies_to: q.discount.applies_to || null,
+        shipping_pending: !!q.discount.shipping_pending } : null,
       // one method, the price only; never the internal working
       shipping: q.shipping ? customerView(q.shipping) : { ok: false, method: 'Standard Delivery', needs_postcode: true } });
   }

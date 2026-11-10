@@ -1,5 +1,36 @@
 # Changelog
 
+## 10 November 2026: Discount codes (version 2026.11.10)
+
+Discount codes for shipping or products, set up by staff in Dashboard > Discounts.
+How-to for the Avanti team: `docs/HOW-TO-DISCOUNT-CODES.md`.
+
+**Before switching on:** run `supabase/migrations/20261110120000_discount_codes.sql` in the
+Supabase SQL Editor, then set `DISCOUNTS_ENABLED=true` in Vercel and redeploy. Until both are
+done, checkout works exactly as before and the code box is hidden.
+
+- One code per order, percentage or dollar amount, off the shipping or off the products (all
+  products, or products chosen in a picker). Optional minimum order, start and end dates (Sydney
+  time), total use limit, per-customer limit, on/off switch.
+- Checkout: "Have a discount code?" under Delivery, with Apply and Remove. A second code replaces
+  the first and says so. Plain messages for invalid, expired, used-up and minimum-order codes; the
+  messages never reveal whether a code exists.
+- Every figure is worked out on the server and the card or PayPal amount is the server's total.
+  Stripe gets the discounted line amounts (no Stripe coupons); PayPal gets its own discount and
+  shipping discount fields. Payment is still only accepted when the amount paid matches the order.
+- Prices include GST, so a discount reduces the GST-inclusive amount and the GST shown is one
+  eleventh of what is actually charged.
+- A code is counted as used only when the order is paid (a repeated payment notice counts once).
+- Orders record the code, its type and value, and the product and shipping discount. The order
+  page, the customer's confirmation email, Avanti's new-order email and the dashboard order
+  show the discount lines.
+- Dashboard > Discounts (admins only): list with search, status (Active, Scheduled, Expired,
+  Inactive, Used up), uses, dates; create and edit form with help text; switch off; delete only
+  while unused; the orders that used each code.
+- Shipping profitability takes a shipping discount into account.
+- The setup SQL builder (`scripts/build-setup-sql.mjs`) now includes `supabase/migrations`.
+- Not done this round: sale prices on products.
+
 ## 4 November 2026: Shipping calculator (client spec v1.0)
 
 Delivery is now worked out from the cart and the customer's postcode, replacing the

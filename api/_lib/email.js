@@ -105,17 +105,22 @@ export function layout({ preheader = '', body, cfg = config(), marketingFooter =
 const h1 = t => `<h1 style="margin:0 0 14px;font-size:22px;line-height:1.3;color:${INK}">${e(t)}</h1>`;
 const p = t => `<p style="margin:0 0 14px">${t}</p>`;
 const btn = (label, url) => `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0"><tr><td style="background:${RED};border-radius:999px"><a href="${e(url)}" style="display:inline-block;padding:12px 26px;color:#fff;font-weight:bold;text-decoration:none">${e(label)}</a></td></tr></table>`;
+// Discount lines, shown only when the order used a code
+const pdRow = o => o.product_discount_cents ? `<tr><td style="padding:8px 0">Product discount (${e(o.discount_code || 'code')})</td><td align="right">-${money(o.product_discount_cents)}</td></tr>` : '';
+const sdRow = o => o.shipping_discount_cents ? `<tr><td style="padding:8px 0">Shipping discount (${e(o.discount_code || 'code')})</td><td align="right">-${money(o.shipping_discount_cents)}</td></tr>` : '';
+const pdText = o => o.product_discount_cents ? `\nProduct discount (${o.discount_code || 'code'}): -${money(o.product_discount_cents)}` : '';
+const sdText = o => o.shipping_discount_cents ? `\nShipping discount (${o.discount_code || 'code'}): -${money(o.shipping_discount_cents)}` : '';
 function itemsTable(o) {
   const rows = (o.items || []).map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINE}"><b>${e(i.name)}</b> × ${i.qty}${i.qty > 1 ? ` <span style="color:${MUTED};font-size:13px">at ${money(i.unit_cents)} each</span>` : ''}${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-size:13px">${e(Object.values(i.options).join(' · '))}</span>` : ''}${i.artwork && i.artwork.later ? `<br><span style="color:${MUTED};font-size:13px">Artwork to follow</span>` : ''}</td><td align="right" style="padding:8px 0;border-bottom:1px solid ${LINE};white-space:nowrap">${money(i.line_cents)}</td></tr>`).join('');
   const sub = o.subtotal_cents != null ? o.subtotal_cents : (o.items || []).reduce((t, i) => t + i.line_cents, 0);
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
-<tr><td style="padding:8px 0">Subtotal</td><td align="right">${money(sub)}</td></tr>
-<tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
+<tr><td style="padding:8px 0">Subtotal</td><td align="right">${money(sub)}</td></tr>${pdRow(o)}
+<tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>${sdRow(o)}
 <tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr>
 <tr><td colspan="2" style="color:${MUTED};font-size:12px">Includes GST of ${money(o.gst_cents)}</td></tr></table>`;
 }
 const itemsText = o => (o.items || []).map(i => `- ${i.name} x ${i.qty}${i.qty > 1 ? ` at ${money(i.unit_cents)} each` : ''}${Object.keys(i.options || {}).length ? ` (${Object.values(i.options).join(', ')})` : ''}: ${money(i.line_cents)}`).join('\n')
-  + `\nSubtotal: ${money(o.subtotal_cents != null ? o.subtotal_cents : (o.items || []).reduce((t, i) => t + i.line_cents, 0))}\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}\nTotal (AUD): ${money(o.total_cents)} (includes GST of ${money(o.gst_cents)})`;
+  + `\nSubtotal: ${money(o.subtotal_cents != null ? o.subtotal_cents : (o.items || []).reduce((t, i) => t + i.line_cents, 0))}${pdText(o)}\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${sdText(o)}\nTotal (AUD): ${money(o.total_cents)} (includes GST of ${money(o.gst_cents)})`;
 const addressText = a => [a.line1, a.line2, `${a.suburb} ${a.state} ${a.postcode}`].filter(Boolean).join(', ');
 const first = n => String(n || '').trim().split(/\s+/)[0] || 'there';
 
@@ -210,15 +215,16 @@ ${Object.keys(i.options || {}).length ? `<br><span style="color:${MUTED};font-si
   const body = (failed ? h1(`Payment failed: order ${o.number}`) + p(`<b>${e(o.name || o.email)}</b> tried to pay <b>${money(o.total_cents)}</b>${provider ? ` by ${e(provider)}` : ''}, but the payment didn't go through, so the checkout was cancelled automatically. They have not been charged. You may want to get in touch and help them finish the order.`)
       : h1(`New order ${o.number}`) + p(`<b>${money(o.total_cents)}</b> paid${provider ? ` by ${e(provider)}` : ''}${placed(o, cfg) ? ` on ${e(placed(o, cfg))}` : ''}.`) + laterHtml)
     + btn('Open the order in the dashboard', admin)
-    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}
-<tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>
-<tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr></table>`
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 16px;font-size:14px">${rows}${pdRow(o)}
+<tr><td style="padding:8px 0">Delivery${o.delivery_method ? `<br><span style="color:${MUTED};font-size:13px">${e(o.delivery_method)}</span>` : ''}${o.delivery_quote_required ? `<br><span style="color:${RED};font-size:13px">Needs a courier quote before dispatch</span>` : ''}</td><td align="right">${money(o.delivery_cents)}</td></tr>${sdRow(o)}
+<tr><td style="padding:8px 0;font-weight:bold">Total (AUD)</td><td align="right" style="font-weight:bold">${money(o.total_cents)}</td></tr>${o.discount_code ? `
+<tr><td colspan="2" style="color:${MUTED};font-size:12px">Includes GST of ${money(o.gst_cents)}. Discount code ${e(o.discount_code)} used.</td></tr>` : ''}</table>`
     + p(`<b>Customer</b><br>${e(o.name || '')}${o.company ? `<br>${e(o.company)}` : ''}<br>${e(o.email)}${o.phone ? `<br>${e(o.phone)}` : ''}`)
     + p(`<b>Deliver to</b><br>${e(addressText(a))}`) + (o.customer_note ? p(`<b>Customer note</b><br>${e(o.customer_note)}`) : '') + (failed ? '' : fileHtml);
   const text = (failed ? `Payment failed for order ${o.number}: ${money(o.total_cents)}${provider ? ` by ${provider}` : ''}. The checkout was cancelled automatically and the customer has not been charged. You may want to get in touch and help them finish the order.\n\n`
       : `New order ${o.number}: ${money(o.total_cents)} paid${provider ? ` by ${provider}` : ''}.\n\n${laterText}`)
     + (o.items || []).map(i => `- ${i.name} x ${i.qty}: ${money(i.line_cents)}${Object.keys(i.options || {}).length ? `\n  ${Object.entries(i.options).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}${art(i) ? `\n  ${art(i)}` : ''}`).join('\n')
-    + `\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}\nTotal: ${money(o.total_cents)}\n\n`
+    + `${pdText(o)}\nDelivery: ${money(o.delivery_cents)}${o.delivery_method ? ` (${o.delivery_method})` : ''}${o.delivery_quote_required ? ' - needs a courier quote' : ''}${sdText(o)}\nTotal: ${money(o.total_cents)}${o.discount_code ? ` (includes GST of ${money(o.gst_cents)}, discount code ${o.discount_code})` : ''}\n\n`
     + `Customer: ${o.name || ''}${o.company ? `, ${o.company}` : ''}, ${o.email}${o.phone ? `, ${o.phone}` : ''}\nDeliver to: ${addressText(a)}${o.customer_note ? `\nNote: ${o.customer_note}` : ''}\n${failed ? '' : fileText}\nOpen in the dashboard: ${admin}`;
   if (later.length && !failed) return { subject: `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email} (artwork to follow)`, html: layout({ preheader: `Artwork to follow. ${money(o.total_cents)}`, body, cfg }), text };
   return { subject: failed ? `Payment failed for order ${o.number} (${money(o.total_cents)}, ${o.name || o.email})` : `New order ${o.number}: ${money(o.total_cents)} from ${o.name || o.email}`, html: layout({ preheader: `${(o.items || []).length} item(s), ${money(o.total_cents)}`, body, cfg }), text };

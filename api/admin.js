@@ -8,9 +8,39 @@ import { loadShippingConfig, saveShippingConfig, shippingFor } from './_lib/ship
 import { quoteShipping, serialiseQuote, customerView, findZone } from './_lib/shipping/engine.js';
 import { validateConfig } from './_lib/shipping/validate.js';
 import { CARRIERS, marketingEmail } from './_lib/email.js';
+import { normaliseCode, CODE_RE, codeStatus, sydneyDayBoundary, sydneyDay, gstIn } from './_lib/discounts.js';
 import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, subscribe, unsubscribe, runScheduled, runAutomations } from './_lib/marketing.js';
 
 const STATUSES = ['paid', 'in_production', 'dispatched', 'delivered', 'cancelled', 'refunded'];
+
+// A discount code as the dashboard shows it (dates as Sydney days, money in cents)
+function discountOut(c, cfg) {
+  return { ...c, percent: c.percent == null ? null : Number(c.percent), status: codeStatus(c),
+    start_date: sydneyDay(c.starts_at, cfg.timezone), end_date: sydneyDay(c.ends_at, cfg.timezone) };
+}
+// Check and tidy what staff typed in the discount form
+function discountIn(b, cfg) {
+  const bad = m => { throw new HttpError(400, m); };
+  const code = normaliseCode(b.code);
+  if (!CODE_RE.test(code)) bad('Codes can only use letters and numbers, 2 to 32 characters, for example SAVE10.');
+  const applies_to = ['shipping', 'products'].includes(b.applies_to) ? b.applies_to : bad('Choose what the code takes money off: shipping or products.');
+  const product_scope = applies_to === 'products' && b.product_scope === 'selected' ? 'selected' : 'all';
+  const product_slugs = product_scope === 'selected' ? [...new Set((Array.isArray(b.product_slugs) ? b.product_slugs : []).map(String).filter(x => /^[\w-]{1,120}$/.test(x)))].slice(0, 500) : [];
+  if (product_scope === 'selected' && !product_slugs.length) bad('Choose at least one product, or set the code to work on all products.');
+  const kind = ['percent', 'amount'].includes(b.kind) ? b.kind : bad('Choose a percentage or a dollar amount.');
+  const num = (v, label) => { const s = String(v ?? '').trim().replace(/^\$/, ''); if (!/^\d+(\.\d{1,2})?$/.test(s)) bad(`${label} must be a number with up to 2 decimal places.`); return Number(s); };
+  let percent = null, amount_cents = null;
+  if (kind === 'percent') { percent = num(b.percent, 'The percentage'); if (!(percent > 0 && percent <= 100)) bad('The percentage must be more than 0 and no more than 100.'); }
+  else { amount_cents = Math.round(num(b.amount, 'The dollar amount') * 100); if (!(amount_cents > 0)) bad('The dollar amount must be more than $0.'); }
+  const min = String(b.min_subtotal ?? '').trim() === '' ? null : Math.round(num(b.min_subtotal, 'The minimum order') * 100);
+  const starts_at = b.start_date ? sydneyDayBoundary(b.start_date, false, cfg.timezone) : null;
+  const ends_at = b.end_date ? sydneyDayBoundary(b.end_date, true, cfg.timezone) : null;
+  if (starts_at && ends_at && ends_at < starts_at) bad('The end date is before the start date.');
+  const int = (v, label) => { const s = String(v ?? '').trim(); if (s === '') return null; if (!/^\d+$/.test(s) || +s < 1) bad(`${label} must be a whole number of 1 or more, or left empty.`); return +s; };
+  return { code, description: String(b.description || '').trim().slice(0, 500) || null, applies_to, product_scope, product_slugs, kind, percent, amount_cents,
+    min_subtotal_cents: min || null, starts_at, ends_at, usage_limit: int(b.usage_limit, 'Total uses'), per_email_limit: int(b.per_email_limit, 'Uses per customer'),
+    active: b.active !== false };
+}
 
 // Signed-in admins see the actual reason when something fails (e.g. a database message), so a problem
 // can be fixed without digging through server logs. Customers never reach this endpoint.
@@ -148,7 +178,11 @@ async function adminAction(req, cfg, admin) {
       const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? v : null;
       const from = need(day(b.from), 'Choose a start date.'), to = need(day(b.to), 'Choose an end date.');
       const end = new Date(new Date(to + 'T00:00:00Z').getTime() + 2 * 86400000).toISOString();   // generous; filtered below in Sydney time
-      const rows = await d.select('orders', `select=id,number,name,status,paid_at,shipping_zone,shipping_postcode,shipping_ex_gst_cents,shipping_override_ex_gst_cents,shipping_config_version,delivery_cents&paid_at=gte.${d.q(new Date(new Date(from + 'T00:00:00Z').getTime() - 86400000).toISOString())}&paid_at=lt.${d.q(end)}&order=paid_at.desc&limit=1000`);
+      const cols = 'id,number,name,status,paid_at,shipping_zone,shipping_postcode,shipping_ex_gst_cents,shipping_override_ex_gst_cents,shipping_config_version,delivery_cents';
+      const range = `paid_at=gte.${d.q(new Date(new Date(from + 'T00:00:00Z').getTime() - 86400000).toISOString())}&paid_at=lt.${d.q(end)}&order=paid_at.desc&limit=1000`;
+      let rows;   // shipping discounts are included when the discount update has been run
+      try { rows = await d.select('orders', `select=${cols},shipping_discount_cents&${range}`); }
+      catch (e) { rows = await d.select('orders', `select=${cols}&${range}`); }
       const local = iso => new Intl.DateTimeFormat('en-CA', { timeZone: cfg.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
       const inRange = rows.filter(r => { const dd = local(r.paid_at); return dd >= from && dd <= to; });
       const ids = inRange.map(r => r.id);
@@ -156,7 +190,9 @@ async function adminAction(req, cfg, admin) {
       const out = inRange.map(r => {
         const mine = costs.filter(c => c.order_id === r.id), last = mine.filter(c => c.kind === 'cost').pop();
         const adj = mine.filter(c => c.kind === 'adjustment').reduce((t, c) => t + c.amount_cents, 0);
-        const charged = r.shipping_override_ex_gst_cents != null ? r.shipping_override_ex_gst_cents : r.shipping_ex_gst_cents;
+        // a shipping discount code lowers what was actually charged for delivery (worked out ex GST)
+        const discounted = r.shipping_discount_cents ? (r.delivery_cents - r.shipping_discount_cents) - gstIn(r.delivery_cents - r.shipping_discount_cents) : null;
+        const charged = r.shipping_override_ex_gst_cents != null ? r.shipping_override_ex_gst_cents : discounted != null ? discounted : r.shipping_ex_gst_cents;
         const actual = last ? last.amount_cents + adj : null;
         return { id: r.id, number: r.number, name: r.name, status: r.status, paid_at: r.paid_at, zone: r.shipping_zone, postcode: r.shipping_postcode,
           calculated_ex_gst_cents: r.shipping_ex_gst_cents, charged_ex_gst_cents: charged, overridden: r.shipping_override_ex_gst_cents != null,
@@ -167,6 +203,44 @@ async function adminAction(req, cfg, admin) {
         charged_cents: withCost.reduce((t, r) => t + r.charged_ex_gst_cents, 0), actual_cents: withCost.reduce((t, r) => t + r.actual_cents, 0),
         margin_cents: withCost.reduce((t, r) => t + r.margin_cents, 0) } });
     }
+    // ---------- discount codes ----------
+    case 'discount-list': {
+      let codes;
+      try { codes = await d.select('discount_codes', 'select=*&order=created_at.desc&limit=1000'); }
+      catch (e) { if (/(could not find|does not exist|schema cache)/i.test(String(e.message)) || ['PGRST205', '42P01'].includes(e.code)) return json({ ready: false, enabled: cfg.discounts.enabled, codes: [] }); throw e; }
+      return json({ ready: true, enabled: cfg.discounts.enabled, codes: codes.map(c => discountOut(c, cfg)) });
+    }
+    case 'discount-get': {
+      const c = need(await d.one('discount_codes', `select=*&id=eq.${d.q(b.id || '')}`), 'That code no longer exists.');
+      const used = await d.select('discount_redemptions', `select=order_id,email,product_discount_cents,shipping_discount_cents,created_at&code_id=eq.${d.q(c.id)}&order=created_at.desc&limit=500`);
+      const orders = used.length ? await d.select('orders', `select=id,number,name,status,total_cents,paid_at&id=in.(${used.map(u => u.order_id).join(',')})`) : [];
+      return json({ code: discountOut(c, cfg), orders: used.map(u => ({ ...u, order: orders.find(o => o.id === u.order_id) || null })) });
+    }
+    case 'discount-save': {
+      const row = discountIn(b, cfg);
+      const old = b.id ? need(await d.one('discount_codes', `select=*&id=eq.${d.q(b.id)}`), 'That code no longer exists.') : null;
+      if (old && old.uses > 0 && old.code !== row.code) throw new HttpError(409, `${old.code} has already been used, so its code can't be changed (orders refer to it). Switch it off and create a new code instead.`);
+      let saved;
+      try { [saved] = old ? await d.update('discount_codes', `id=eq.${d.q(old.id)}`, row) : await d.insert('discount_codes', { ...row, created_by: who }); }
+      catch (e) { if (e.code === '23505' || /duplicate key/i.test(e.message)) throw new HttpError(409, `There is already a code called ${row.code}. Please choose a different code.`); throw e; }
+      await audit(d, who, old ? 'discount.update' : 'discount.create', 'discount_code', saved.id, { code: saved.code });
+      return json({ code: discountOut(saved, cfg) });
+    }
+    case 'discount-active': {
+      const [c] = await d.update('discount_codes', `id=eq.${d.q(need(b.id, 'Missing code.'))}`, { active: !!b.active });
+      need(c, 'That code no longer exists.');
+      await audit(d, who, b.active ? 'discount.activate' : 'discount.deactivate', 'discount_code', c.id, { code: c.code });
+      return json({ code: discountOut(c, cfg) });
+    }
+    case 'discount-delete': {
+      const c = need(await d.one('discount_codes', `select=*&id=eq.${d.q(b.id || '')}`), 'That code no longer exists.');
+      const used = await d.select('discount_redemptions', `select=id&code_id=eq.${d.q(c.id)}&limit=1`);
+      if (c.uses > 0 || used.length) throw new HttpError(409, `${c.code} has been used on an order, so it can't be deleted (the order history needs it). Switch it off instead.`);
+      await d.remove('discount_codes', `id=eq.${d.q(c.id)}`);
+      await audit(d, who, 'discount.delete', 'discount_code', c.id, { code: c.code });
+      return json({ ok: true });
+    }
+
     case 'analytics': {
       const day = v => { const s = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;   // and a real date: no 31 February
         const t = new Date(s + 'T00:00:00Z'); return !isNaN(t) && t.toISOString().slice(0, 10) === s ? s : null; };

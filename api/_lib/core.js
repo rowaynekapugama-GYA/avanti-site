@@ -58,6 +58,9 @@ export function config() {
       phone: E('BUSINESS_PHONE', '(02) 9729 0139'),
       email: E('EMAIL_REPLY_TO', 'info@avantiprint.com.au'),
     },
+    // Discount codes at checkout. Off unless DISCOUNTS_ENABLED=true; also off while the discount tables
+    // don't exist yet, so the live checkout works exactly as before until the database update has been run.
+    discounts: { enabled: E('DISCOUNTS_ENABLED', 'false').trim().toLowerCase() === 'true' },
     cronSecret: E('CRON_SECRET'),
   };
 }

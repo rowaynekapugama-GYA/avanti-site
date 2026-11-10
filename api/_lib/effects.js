@@ -5,6 +5,7 @@
 // in try/catch, problems are written to the order's timeline, and the change itself stands.
 import { config, storageSign } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
+import { redeem } from './discounts.js';
 import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail, artworkRequestEmail, artworkReceivedEmail, needsArtwork } from './email.js';
 
 // Staff can switch order emails off instantly in the dashboard (server-only flag "order_emails" = false).
@@ -160,6 +161,8 @@ export async function afterTransition(d, orderId, from, to, cfg = config(), opts
     if (o) await timelineNote(d, o, `Could not update the customer record: ${String(err.message).slice(0, 300)}`).catch(() => {});
   }
   if (!o) return;
+  // a discount code counts as used only once the payment has gone through (never throws)
+  if (to === 'paid' && o.discount_code_id) await redeem(d, o);
   // an unpaid checkout that is cancelled: the customer isn't emailed. If Stripe or PayPal said the
   // payment failed, the Avanti team is told (WooCommerce's "Failed order" email); tidy-ups are silent.
   if (to === 'cancelled' && from === 'pending_payment') {

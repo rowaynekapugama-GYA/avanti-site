@@ -9,6 +9,11 @@ import { quoteShipping, serialiseQuote, customerView, findZone } from './_lib/sh
 import { validateConfig } from './_lib/shipping/validate.js';
 import { CARRIERS, marketingEmail } from './_lib/email.js';
 import { normaliseCode, CODE_RE, codeStatus, sydneyDayBoundary, sydneyDay, gstIn } from './_lib/discounts.js';
+import { refundsReady, refundFromDashboard, refundBlock, refundContext, checkRefund, REASONS, left } from './_lib/refunds.js';
+import { invoicesReady, businessDetails, detailsComplete, ensureInvoice, invoicePdf, invoiceLink, signedFile, abnValid, abnDigits, abnFormat, BUCKET, methodLabel } from './_lib/invoices.js';
+import { loadImage } from './_lib/pdf.js';
+import { storageUpload } from './_lib/core.js';
+import { sendEmail, invoiceEmail } from './_lib/email.js';
 import { sendCampaign, sendTest, campaignStats, audience, matches, marketable, subscribe, unsubscribe, runScheduled, runAutomations } from './_lib/marketing.js';
 
 const STATUSES = ['paid', 'in_production', 'dispatched', 'delivered', 'cancelled', 'refunded'];
@@ -62,6 +67,120 @@ async function adminAction(req, cfg, admin) {
   const need = (v, msg) => { if (!v) throw new HttpError(400, msg); return v; };
 
   switch (action) {
+    // ---------- refunds and tax invoices ----------
+    case 'money-features': {   // what the dashboard should show; nothing new appears until switched on and set up
+      const refunds = await refundsReady(d, cfg), invoices = await invoicesReady(d, cfg);
+      const biz = invoices ? await businessDetails(d) : {};
+      return json({ refunds, invoices, details_complete: invoices ? detailsComplete(biz) : false, reasons: REASONS });
+    }
+    case 'order-money': {   // refunds and invoice for one order
+      let o = await loadOrder(d, need(b.order_id, 'Missing order.'));
+      if (!o) throw new HttpError(404, 'Order not found.');
+      const refunds = await refundsReady(d, cfg), invoices = await invoicesReady(d, cfg);
+      // refunds made directly in Stripe (or before refunds were tracked) are brought in first, so the totals are right
+      const ctx = refunds && o.paid_at ? await refundContext(d, o, cfg, { timeout: 6000 }) : {};
+      if (refunds && o.paid_at) o = await loadOrder(d, o.id);
+      const rows = refunds ? await d.select('refunds', `select=id,amount_cents,reason,note,source,status,failure,admin_email,provider,provider_refund_id,adjustment_number,adjustment_pdf_path,created_at&order_id=eq.${d.q(o.id)}&order=created_at`) : [];
+      const biz = invoices ? await businessDetails(d) : {};
+      return json({ refunds, invoices, details_complete: detailsComplete(biz),
+        refunded_cents: o.refunded_cents || 0, left_cents: refunds ? left(o) : null, block: refunds ? refundBlock(o, cfg, ctx) : null, method: methodLabel(o), reasons: REASONS,
+        rows: rows.map(r => ({ ...r, has_note: !!r.adjustment_pdf_path, adjustment_pdf_path: undefined, provider_refund_id: undefined,
+          unconfirmed: r.status === 'pending' && r.source === 'dashboard' && !r.provider_refund_id })),
+        invoice: invoices && o.invoice_number ? { number: o.invoice_number, issued_at: o.invoice_issued_at, sent_at: o.invoice_sent_at, has_pdf: !!o.invoice_pdf_path } : null,
+        buyer: { business: o.buyer_business_name || o.company || null, abn: o.buyer_abn ? abnFormat(o.buyer_abn) : null, abn_ok: o.buyer_abn ? abnValid(o.buyer_abn) : null } });
+    }
+    case 'order-refund': {
+      if (!(await refundsReady(d, cfg))) throw new HttpError(409, 'Refunds from the dashboard are switched off.');
+      const amount = b.full ? null : Math.round(Number(String(b.amount ?? '').replace(/[$,\s]/g, '')) * 100);
+      if (!b.full && !(amount > 0)) throw new HttpError(400, 'Please enter an amount to refund, for example 25.00.');
+      let r;
+      try {
+        r = await refundFromDashboard(d, { orderId: need(b.order_id, 'Missing order.'), amountCents: amount, full: !!b.full, reason: b.reason, note: b.note,
+          notify: b.notify !== false, requestKey: b.request_key, admin }, cfg);
+      } catch (e) {   // refused or failed attempts are audited too
+        await audit(d, who, 'order.refund', 'order', b.order_id, { amount_cents: amount, full: !!b.full, reason: b.reason, status: 'not made', error: String(e.message).slice(0, 200) }).catch(() => {});
+        throw e;
+      }
+      await audit(d, who, 'order.refund', 'order', b.order_id, { amount_cents: r.refund.amount_cents, status: r.unconfirmed ? 'unconfirmed' : r.refund.status, reason: b.reason, repeated: !!r.repeated });
+      if (r.unconfirmed) return json({ status: 'unconfirmed', message: r.message, refund_id: r.refund.id }, 202);
+      return json({ status: r.refund.status, amount_cents: r.refund.amount_cents, adjustment_number: r.refund.adjustment_number || null, repeated: !!r.repeated,
+        refunded_cents: r.order.refunded_cents, left_cents: left(r.order), order_status: r.order.status });
+    }
+    case 'refund-check': {   // a refund whose answer never came back, or one still processing
+      if (!(await refundsReady(d, cfg))) throw new HttpError(409, 'Refunds from the dashboard are switched off.');
+      const r = await checkRefund(d, { refundId: need(b.refund_id, 'Missing refund.'), admin, notRefunded: b.not_refunded === true }, cfg);
+      await audit(d, who, 'order.refund_check', 'order', r.order && r.order.id, { refund_id: b.refund_id, status: r.unconfirmed ? 'unconfirmed' : r.refund.status, not_refunded: b.not_refunded === true });
+      return json({ status: r.unconfirmed ? 'unconfirmed' : r.refund.status, message: r.message || null, manual: !!r.manual }, r.unconfirmed ? 202 : 200);
+    }
+    case 'invoice-generate': {   // an older paid order, or one whose invoice couldn't be made at the time
+      if (!(await invoicesReady(d, cfg))) throw new HttpError(409, 'Tax invoices are switched off.');
+      const o = await loadOrder(d, need(b.order_id, 'Missing order.'));
+      if (!o) throw new HttpError(404, 'Order not found.');
+      if (!o.paid_at) throw new HttpError(409, 'Only paid orders get a tax invoice.');
+      const r = await ensureInvoice(d, o, cfg);
+      if (!r.ok) throw new HttpError(409, r.reason === 'details' ? 'Add the business legal name and ABN in Business details first.' : 'This order can\'t have an invoice yet.');
+      if (!o.invoice_number) await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `Tax invoice ${r.order.invoice_number} created (dated ${String(o.paid_at).slice(0, 10)}, the payment date).` });
+      await audit(d, who, 'invoice.generate', 'order', o.id, { number: r.order.invoice_number });
+      return json({ number: r.order.invoice_number });
+    }
+    case 'invoice-url': {   // a download link that works for 10 minutes
+      if (b.refund_id) {
+        const r = await d.one('refunds', `select=adjustment_pdf_path&id=eq.${d.q(b.refund_id)}`);
+        if (!r || !r.adjustment_pdf_path) throw new HttpError(404, 'Adjustment note not found.');
+        return json({ url: await signedFile(cfg, r.adjustment_pdf_path, 600) });
+      }
+      const o = await d.one('orders', `select=invoice_pdf_path&id=eq.${d.q(need(b.order_id, 'Missing order.'))}`);
+      if (!o || !o.invoice_pdf_path) throw new HttpError(404, 'This order has no invoice yet.');
+      return json({ url: await signedFile(cfg, o.invoice_pdf_path, 600) });
+    }
+    case 'invoice-resend': {   // to the customer, or to another address (their accounts team)
+      if (!(await invoicesReady(d, cfg))) throw new HttpError(409, 'Tax invoices are switched off.');
+      const o = await loadOrder(d, need(b.order_id, 'Missing order.'));
+      if (!o || !o.invoice_pdf_path) throw new HttpError(409, 'This order has no invoice yet. Use Generate invoice first.');
+      const to = String(b.to || o.email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)) throw new HttpError(400, 'Please enter a valid email address.');
+      const biz = await businessDetails(d), pdf = await invoicePdf(d, o, cfg);
+      const r = await sendEmail(d, { kind: 'transactional', template: 'tax_invoice', to, order_id: o.id, ...invoiceEmail(o, biz, invoiceLink(o, cfg), cfg),
+        attachments: [{ filename: `Tax invoice ${o.invoice_number}.pdf`, content: pdf.toString('base64') }] }, cfg);
+      if (!o.invoice_sent_at && r.status !== 'failed' && to === o.email) await d.update('orders', `id=eq.${d.q(o.id)}`, { invoice_sent_at: new Date().toISOString() });
+      await d.insert('order_events', { order_id: o.id, from_status: o.status, to_status: o.status, actor: who, note: `Tax invoice ${o.invoice_number} sent to ${to} (${r.status}).` });
+      await audit(d, who, 'invoice.resend', 'order', o.id, { to, status: r.status });
+      if (r.status === 'failed') throw new HttpError(502, `The email couldn't be sent: ${String(r.error || '').slice(0, 200)}`);
+      return json({ status: r.status, to });
+    }
+    case 'business-get': {
+      if (!(await invoicesReady(d, cfg))) return json({ ready: false, enabled: cfg.invoices.enabled });
+      const biz = await businessDetails(d);
+      return json({ ready: true, details: { ...biz, abn: biz.abn ? abnFormat(biz.abn) : '' }, complete: detailsComplete(biz),
+        logo_url: biz.logo_path ? await signedFile(cfg, biz.logo_path, 600).catch(() => null) : null });
+    }
+    case 'business-save': {
+      if (!(await invoicesReady(d, cfg))) throw new HttpError(409, 'Tax invoices are switched off.');
+      const t = (v, n) => String(v ?? '').trim().slice(0, n) || null;
+      const row = { id: 1, legal_name: t(b.legal_name, 200), trading_name: t(b.trading_name, 200), address: t(b.address, 400), phone: t(b.phone, 60),
+        email: t(b.email, 200), invoice_footer: t(b.invoice_footer, 600), updated_at: new Date().toISOString(), updated_by: admin.email };
+      const abn = abnDigits(b.abn);
+      if (abn && !abnValid(abn)) throw new HttpError(400, 'That ABN doesn\'t pass the ABN check. Please check the 11 digits.');
+      row.abn = abn || null;
+      if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(row.email)) throw new HttpError(400, 'Please enter a valid email address.');
+      await d.insert('business_details', row, { onConflict: 'id' });
+      await audit(d, who, 'business.save', 'business_details', 1, { legal_name: row.legal_name, abn: row.abn });
+      return json({ ok: true, complete: detailsComplete(row) });
+    }
+    case 'business-logo': {   // optional logo for invoices: a PNG or JPEG up to 500 KB, or remove it
+      if (!(await invoicesReady(d, cfg))) throw new HttpError(409, 'Tax invoices are switched off.');
+      if (b.remove) { await d.insert('business_details', { id: 1, logo_path: null, updated_at: new Date().toISOString(), updated_by: admin.email }, { onConflict: 'id' }); return json({ ok: true }); }
+      const m = /^data:(image\/(png|jpeg));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.data || ''));
+      if (!m) throw new HttpError(400, 'Please choose a PNG or JPEG image.');
+      const bytes = Buffer.from(m[3], 'base64');
+      if (bytes.length > 500_000) throw new HttpError(400, 'Please use an image smaller than 500 KB.');
+      if (!loadImage(bytes)) throw new HttpError(400, 'That image can\'t be used. Please save it as a standard PNG or JPEG and try again.');
+      const path = `branding/logo-${Date.now()}.${m[2] === 'png' ? 'png' : 'jpg'}`;
+      await storageUpload(cfg, BUCKET, path, bytes, m[1]);
+      await d.insert('business_details', { id: 1, logo_path: path, updated_at: new Date().toISOString(), updated_by: admin.email }, { onConflict: 'id' });
+      await audit(d, who, 'business.logo', 'business_details', 1, { path });
+      return json({ ok: true });
+    }
     case 'order-transition': {
       const to = need(STATUSES.includes(b.to) && b.to, 'Unknown status.');
       const data = {};

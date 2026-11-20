@@ -1,6 +1,59 @@
 # Avanti Print & Design, new storefront (v1)
 
-Version 2026.11.10. Release notes: `CHANGELOG.md`.
+Version 2026.11.20. Release notes: `CHANGELOG.md`.
+
+## Refunds and tax invoices (November 2026)
+
+Admins refund paid orders from the order page, and every paid order gets a tax invoice emailed with the
+PDF attached. Guide for the Avanti team: `docs/HOW-TO-REFUNDS-AND-INVOICES.md`.
+
+**Settings** (Vercel, Production and Preview; a change needs a redeploy):
+- `REFUNDS_ENABLED=true`: the Refunds box and Refund button on paid orders.
+- `INVOICES_ENABLED=true`: tax invoices, adjustment notes, Dashboard > Business details, and the optional
+  Business name / ABN fields at checkout.
+
+Both are off unless set to `true`, and both stay off while their tables are missing, so the live site
+works exactly as before until `supabase/migrations/20261120120000_refunds_invoices.sql` has been run.
+No new keys: refunds use `STRIPE_SECRET_KEY` (a restricted key needs **Refunds: Write**) and the PayPal app.
+
+**Database** (the SQL file is safe to run again and only adds things):
+
+| Table, column or function | What it holds |
+| --- | --- |
+| `refunds` | One row per refund: order, provider, provider refund id, amount, reason, note, source (dashboard, stripe, paypal), status, admin, and its adjustment note number and PDF |
+| `business_details` | One row: legal name, trading name, ABN, address, phone, email, invoice footer, logo (admin only) |
+| `invoice_counters` | The last invoice and adjustment note numbers, locked while a number is taken |
+| `orders.invoice_number`, `invoice_issued_at`, `invoice_pdf_path`, `invoice_sent_at`, `refunded_cents`, `buyer_business_name`, `buyer_abn` | Each order's invoice, refunded total and business buyer details |
+| `refund_reserve`, `refund_settle`, `refund_external`, `invoice_assign`, `adjustment_assign` | Server-only functions that lock the order while they work |
+| Storage bucket `invoices` | Private PDFs and the logo, handed out only through signed links that expire after 10 minutes |
+
+**Webhook events** (add them if the Stripe or PayPal webhook isn't already sending them):
+- Stripe: `charge.refunded` and `refund.updated` (`refund.created` is also handled).
+- PayPal: `PAYMENT.CAPTURE.REFUNDED`.
+
+A refund made in Stripe or PayPal is read back and recorded once, matched by the provider's refund id, so
+it never counts twice with a dashboard refund.
+
+**Dashboard screens:**
+- Order page: a **Refunds** box (refunded and left, every refund with its adjustment note, and the
+  Refund button with a confirm step).
+- Order page: a **Tax invoice** box (Download, Resend to any address, Generate for older orders).
+- Orders list: an Invoice column, and search by invoice number.
+- **Business details** under Commerce.
+- All of it is admin only, as the whole dashboard is.
+
+**Invoice numbers** are AV-000001 upwards, taken inside a database transaction once payment succeeds (from
+the webhook or the PayPal capture), so there are no gaps or duplicates. An invoice generated later for an
+older order takes the next number but is dated with its original payment date. Adjustment notes are
+AN-000001 upwards.
+
+**GST:** prices include GST and every item is taxable, so the invoice shows GST as the GST-inclusive total
+divided by 11, to the cent, on the discounted total including shipping, with "All items include GST".
+The order record works GST out for products and shipping separately, so in rare cases (mostly with a
+shipping discount) the two can differ by 1 cent.
+
+**Tests:** `tests/invoices.test.mjs` (GST maths, ABN check digits, the $1,000 rule, PDF contents) and the
+refund and invoice sections at the end of `tests/api.test.mjs`.
 
 ## Discount codes (November 2026)
 

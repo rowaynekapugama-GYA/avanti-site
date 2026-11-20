@@ -1100,6 +1100,7 @@ p{margin:0 0 1em}
 .co-code{margin-top:14px}.co-code>label{display:block;font-size:.84rem;font-weight:700;margin-bottom:6px}
 .co-code-row{display:flex;gap:8px}.co-code-row input{flex:1;min-width:0;text-transform:uppercase}.co-code-row .btn{flex:none}
 .co-code-on{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border:1.5px dashed var(--ink);border-radius:var(--r);font-size:.9rem}
+.co-abn-msg{margin:6px 0 0;font-size:.84rem;color:var(--red);min-height:0}
 .co-code-2{margin-top:12px;font-weight:600!important;font-size:.8rem!important;color:var(--ink-3)}
 .co-code-msg{margin:8px 0 0;font-size:.86rem;line-height:1.45}.co-code-msg.bad{color:var(--red);font-weight:600}
 .co-disc{color:#1d7a46}
@@ -1365,6 +1366,7 @@ h1 .gya-st { font-size: .8rem; margin-left: 8px; }
 .gya-dc-pick { border: 1.5px solid var(--g-line); border-radius: var(--g-r); padding: 10px; margin: -4px 0 14px; } .gya-dc-pick .gya-in { max-width: 260px; }
 .gya-dc-plist { max-height: 260px; overflow: auto; display: flex; flex-direction: column; margin-top: 8px; } .gya-dc-plist .gya-check { margin: 3px 0; }
 .gya-dc-help li { margin: 0 0 6px; }
+.gya-refunds li { margin: 0 0 10px; } .gya-dl-big dd { font-size: .95rem; }
 .gya-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1.5px solid var(--g-line); margin: 0 0 16px; }
 .gya-tabs button { background: none; border: 0; border-bottom: 2.5px solid transparent; margin-bottom: -1.5px; padding: 9px 12px; font: inherit; font-size: .9rem; cursor: pointer; color: var(--g-ink3); }
 .gya-tabs button.on { color: var(--g-ink); border-bottom-color: var(--g-ink); font-weight: 600; }
@@ -2513,7 +2515,7 @@ const GYA = (() => {
       if (/sign in again/i.test(e.message)) { clearSession(); location.hash = '#/login?next=' + encodeURIComponent(location.hash); } }
   }
   // sidebar grouped like an operator portal; sections can set their own group
-  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', discounts: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce',
+  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', discounts: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce', business: 'Commerce',
     customers: 'Customers', campaigns: 'Marketing', segments: 'Marketing', automations: 'Marketing', emaillog: 'Marketing',
     blog: 'Content', pages: 'Content', content: 'Content', seo: 'Content', media: 'Content', settings: 'Account' };
   function navHtml(current) {
@@ -2529,7 +2531,7 @@ const GYA = (() => {
       headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
     catch (e) { throw new Error('Could not reach the shop server. Check your connection and try again.'); }
     let d = {}; try { d = await r.json(); } catch (e) {}
-    if (!r.ok) throw new Error(d.error || (r.status === 404 ? 'The shop server is not set up on this site yet.' : `Request failed (${r.status})`));
+    if (!r.ok) { const err = new Error(d.error || (r.status === 404 ? 'The shop server is not set up on this site yet.' : `Request failed (${r.status})`)); err.data = d; err.status = r.status; throw err; }
     return d;
   }
   async function download(bucket, path) {   // private files (customer artwork) via the signed-in session
@@ -3042,7 +3044,7 @@ const GYA = (() => {
   const PAGE = 50;
   const empty = (msg) => `<p class="gya-muted" style="padding:18px 4px">${msg}</p>`;
   const card = (label, value, sub = '') => `<div class="gya-statc"><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
-  const orderRow = o => `<tr class="gya-click" data-href="#/admin/orders/${o.id}"><td><a href="#/admin/orders/${o.id}">${esc(o.number)}</a></td><td>${o.name ? `${esc(o.name)}<div class="gya-muted gya-small">${esc(o.email)}</div>` : esc(o.email)}</td><td>${pill(o.status)}</td><td>${$c(o.total_cents)}</td><td>${dt(o.created_at)}</td></tr>`;
+  const orderRow = (o, inv) => `<tr class="gya-click" data-href="#/admin/orders/${o.id}"><td><a href="#/admin/orders/${o.id}">${esc(o.number)}</a></td><td>${o.name ? `${esc(o.name)}<div class="gya-muted gya-small">${esc(o.email)}</div>` : esc(o.email)}</td><td>${pill(o.status)}${o.refunded_cents && o.status !== 'refunded' ? ` ${refundState(o)}` : ''}</td><td>${$c(o.total_cents)}</td>${inv ? `<td>${o.invoice_number ? esc(o.invoice_number) : '<span class="gya-muted">–</span>'}</td>` : ''}<td>${dt(o.created_at)}</td></tr>`;
   const clickRows = root => qsa('tr[data-href]', root).forEach(tr => tr.onclick = e => { if (!e.target.closest('a,button,input')) location.hash = tr.dataset.href; });
 
   /* ---------------- Overview ---------------- */
@@ -3060,7 +3062,7 @@ const GYA = (() => {
       <div class="gya-stats">${card('Revenue (paid)', $c(s.revenue_paid_cents))}${card('Orders', s.orders)}${card('Customers', s.customers)}${card('Active products', s.active_products)}
         ${card('Open orders', s.open_orders, 'paid, not yet dispatched')}${card('Subscribers', s.subscribers, 'can receive marketing email')}${card('Awaiting payment', s.awaiting_payment, 'checkouts not yet paid')}</div>
       <section class="gya-card"><div class="gya-cardhead"><h3>Recent orders</h3><a href="#/admin/orders" class="gya-link">All orders →</a></div>
-      ${recent.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${recent.map(orderRow).join('')}</tbody></table></div>` : empty('No orders yet. They will appear here as soon as the first customer pays.')}</section>`;
+      ${recent.length ? `<div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${recent.map(o => orderRow(o)).join('')}</tbody></table></div>` : empty('No orders yet. They will appear here as soon as the first customer pays.')}</section>`;
     clickRows(main);
   } });
 
@@ -3075,16 +3077,18 @@ const GYA = (() => {
       <section class="gya-card gya-pad0"><div id="ofList"></div></section>`;
     qs('#ofStatus', main).value = of.status; qs('#ofFrom', main).value = of.from; qs('#ofTo', main).value = of.to; qs('#ofQ', main).value = of.q;
     let offset = 0, rows = [];
+    const mf = await moneyFeatures(), inv = !!mf.invoices;
+    if (inv && !mf.details_complete) qs('.gya-ofilters', main).insertAdjacentHTML('beforebegin', detailsWarn());
     const draw = async (more) => {
       if (!more) { offset = 0; rows = []; }
-      let q = `select=id,number,name,email,status,total_cents,created_at&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
+      let q = `select=id,number,name,email,status,total_cents,created_at${inv ? ',invoice_number' : ''}${mf.refunds ? ',refunded_cents' : ''}&order=created_at.desc&limit=${PAGE + 1}&offset=${offset}`;
       if (of.status === 'placed') q += '&status=neq.pending_payment'; else if (of.status !== 'all') q += `&status=eq.${of.status}`;
       if (of.from) q += `&created_at=gte.${enc(new Date(of.from + 'T00:00:00').toISOString())}`;
       if (of.to) { const t = new Date(of.to + 'T00:00:00'); t.setDate(t.getDate() + 1); q += `&created_at=lt.${enc(t.toISOString())}`; }
       const term = of.q.replace(/[(),*%]/g, ' ').trim();
-      if (term) q += `&or=(number.ilike.*${enc(term)}*,email.ilike.*${enc(term)}*,name.ilike.*${enc(term)}*)`;
+      if (term) q += `&or=(number.ilike.*${enc(term)}*,email.ilike.*${enc(term)}*,name.ilike.*${enc(term)}*${inv ? `,invoice_number.ilike.*${enc(term)}*` : ''})`;
       const got = await rest(`orders?${q}`); const hasMore = got.length > PAGE; rows = rows.concat(got.slice(0, PAGE)); offset += PAGE;
-      qs('#ofList', main).innerHTML = rows.length ? `<p class="gya-muted gya-small" style="padding:10px 14px 0;margin:0">Showing ${rows.length}${hasMore ? '+' : ''} order${rows.length === 1 ? '' : 's'}</p><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>${rows.map(orderRow).join('')}</tbody></table></div>
+      qs('#ofList', main).innerHTML = rows.length ? `<p class="gya-muted gya-small" style="padding:10px 14px 0;margin:0">Showing ${rows.length}${hasMore ? '+' : ''} order${rows.length === 1 ? '' : 's'}</p><div class="gya-table-wrap"><table class="gya-table"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th>${inv ? '<th>Invoice</th>' : ''}<th>Placed</th></tr></thead><tbody>${rows.map(r => orderRow(r, inv)).join('')}</tbody></table></div>
         ${hasMore ? '<p style="text-align:center;padding:12px"><button class="gya-btn gya-btn-line" id="ofMore">Load more</button></p>' : ''}` : empty('No orders match these filters.');
       clickRows(main); const m = qs('#ofMore', main); if (m) m.onclick = () => draw(true);
     };
@@ -3104,7 +3108,7 @@ const GYA = (() => {
     cancelled: ['Cancel order', 'The order is cancelled. Remember to refund the customer in Stripe or PayPal.', 'an email saying their order has been cancelled'],
     refunded: ['Mark refunded', 'Only do this once the refund has been issued in Stripe or PayPal.', 'an email confirming their refund'],
   };
-  const MAIL = { 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
+  const MAIL = { tax_invoice: 'Tax invoice', refund: 'Refund confirmation', 'order-paid': 'Order confirmation', 'order-in_production': 'Processing update', 'order-dispatched': 'Dispatched update', 'order-delivered': 'Delivered update',
     'order-cancelled': 'Cancellation', 'order-refunded': 'Refund confirmation', 'order-new-staff': 'New-order alert to the Avanti team',
     'order-note': 'Note to the customer', 'order-failed-staff': 'Payment-failed alert to the Avanti team',
     'order-artwork-request': 'Artwork upload link', 'order-artwork-reminder': 'Artwork reminder', 'order-artwork-staff': 'Artwork received alert to the Avanti team' };
@@ -3151,7 +3155,8 @@ const GYA = (() => {
           <section class="gya-card"><h3>Payment</h3><dl class="gya-dl"><dt>Provider</dt><dd>${esc({ stripe: 'Stripe', paypal: 'PayPal', simulator: 'Test gateway' }[o.provider] || o.provider || '')}</dd>
             <dt>Reference</dt><dd>${o.provider_ref ? (refLink ? `<a class="gya-link" href="${refLink}" target="_blank" rel="noopener">${esc(o.provider_ref)}</a>` : esc(o.provider_ref)) : '<span class="gya-muted">Not paid yet</span>'}</dd>
             <dt>Paid</dt><dd>${dtt(o.paid_at) || '–'}</dd>${o.discount_code ? `<dt>Discount code</dt><dd>${o.discount_code_id ? `<a class="gya-link" href="#/admin/discounts/${o.discount_code_id}">${esc(o.discount_code)}</a>` : esc(o.discount_code)} · ${o.discount_type === 'percent' ? `${Number(o.discount_value)}%` : $c(Math.round(Number(o.discount_value) * 100))} off ${o.discount_applies_to === 'shipping' ? 'shipping' : 'products'}<br><span class="gya-muted">Saved the customer ${$c((o.product_discount_cents || 0) + (o.shipping_discount_cents || 0))}</span></dd>` : ''}${o.carrier ? `<dt>Courier</dt><dd>${esc(o.carrier)}${o.tracking_number ? ` · ${esc(o.tracking_number)}` : ''}</dd>` : ''}</dl>
-            ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
+            ${['paid', 'in_production', 'dispatched', 'delivered'].includes(o.status) || (o.status === 'cancelled' && o.paid_at) ? '<p class="gya-muted gya-small" id="odRefundHint">Refunds are issued in the Stripe or PayPal dashboard. The order updates to Refunded automatically when they tell us.</p>' : ''}</section>
+          <div id="odMoneyCard"></div>
           <div id="odShipCard"></div>
           <section class="gya-card"><h3>Emails</h3>${mails.length ? `<ul class="gya-mini">${mails.map(m => `<li>${esc(mailName(m.template))} ${mailPill(m)} <span class="gya-muted">${dtt(m.created_at)}<br>to ${esc(m.to_email || '')}</span>${m.bounce_reason ? `<br><small class="gya-warn-t">${esc(m.bounce_reason)}</small>` : ''}</li>`).join('')}</ul>` : empty('None yet.')}
             ${canResend ? `<div class="gya-row" style="margin-top:12px"><button class="gya-btn gya-btn-line gya-btn-sm" data-resend="customer">Resend ${esc(mailName('order-' + o.status).toLowerCase())} to customer</button>${o.paid_at ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="staff">Resend new-order alert</button>' : ''}${items.some(i => i.artwork && i.artwork.later) && ['paid', 'in_production'].includes(o.status) ? '<button class="gya-btn gya-btn-line gya-btn-sm" data-resend="artwork">Resend artwork upload link</button>' : ''}</div>
@@ -3198,9 +3203,172 @@ const GYA = (() => {
         if (mail) toast(r.status === 'failed' ? 'The note could not be emailed. See the timeline.' : `Note ${r.status === 'logged' ? 'recorded' : 'emailed'} to ${r.to}`, r.status === 'failed');
         orderDetail(main, id); }); };
     qsa('[data-dl]', main).forEach(b => b.onclick = () => G.download('artwork', b.dataset.dl).catch(e => toast(e.message, true)));
+    moneyCard(main, o, () => orderDetail(main, id)).catch(e => { const box = qs('#odMoneyCard', main); if (box) box.innerHTML = `<p class="gya-warn">Refunds and invoices couldn't load: ${esc(e.message)}</p>`; });
     shOrderCard(o).then(h => { const box = qs('#odShipCard', main); if (!box || !h) return; box.innerHTML = h; shOrderWire(main, o, () => orderDetail(main, id)); }).catch(() => {});
   }
   G.section({ id: 'orders', label: 'Orders', order: 5, render: (main, sub) => sub[0] ? orderDetail(main, sub[0]) : orderList(main) });
+
+  /* ---------------- Refunds and tax invoices ----------------
+     Nothing here shows until REFUNDS_ENABLED / INVOICES_ENABLED are on and the database update has been run.
+     Every amount is checked again on the server (and in the database) before anything reaches Stripe or PayPal. */
+  let MF = null;
+  const moneyFeatures = () => window.GYA_DEMO ? Promise.resolve({}) : (MF || (MF = server('money-features', {}).catch(() => { MF = null; return {}; })));
+  const detailsWarn = () => `<p class="gya-warn">Tax invoices are switched on, but none can be made until Avanti's legal business name and ABN are filled in. <a class="gya-link" href="#/admin/business">Add them in Business details</a>.</p>`;
+  const refundState = o => !o.refunded_cents ? '' : o.refunded_cents >= o.total_cents ? '<span class="gya-st gya-st-off">Refunded</span>' : '<span class="gya-st gya-st-wait">Part refunded</span>';
+  // a PDF from a short-lived signed link, saved straight to the computer (no pop-up for a browser to block)
+  async function savePdf(url, name) {
+    const r = await fetch(url); if (!r.ok) throw new Error('That file could not be downloaded. Please try again.');
+    const u = URL.createObjectURL(await r.blob()), a = document.createElement('a');
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 30000);
+  }
+  const R_ST = { succeeded: ['Refunded', 'ok'], pending: ['Waiting for the provider', 'wait'], failed: ['Failed', 'bad'], unconfirmed: ['Not confirmed yet', 'wait'] };
+  const UNCONF = 'We couldn\'t confirm whether this refund went through. Please don\'t refund again: press Check refund to find out. It\'s safe to press more than once.';
+  // Check refund: asks Stripe or PayPal what happened to a refund whose answer never came back (or is still processing)
+  function wireCheck(box, reload) {
+    qsa('[data-chk]', box).forEach(b => b.onclick = () => busy(b, async () => {
+      const r = await server('refund-check', { refund_id: b.dataset.chk, ...(b.dataset.nr ? { not_refunded: true } : {}) });
+      if (r.manual) { const li = b.closest('li'); if (li && !qs('[data-nr]', li)) li.insertAdjacentHTML('beforeend', `<p class="gya-warn-t">${esc(r.message)}</p><button class="gya-btn gya-btn-line gya-btn-sm" data-chk="${esc(b.dataset.chk)}" data-nr="1">It wasn't refunded</button>`); wireCheck(li, reload); return; }
+      toast(r.message || (r.status === 'succeeded' ? 'The refund went through.' : r.status === 'failed' ? 'The refund didn\'t go through, so nothing was refunded. You can refund again.' : 'Still waiting for an answer. Try Check refund again in a few minutes.'), r.status === 'unconfirmed');
+      reload();
+    }));
+  }
+
+  async function moneyCard(main, o, reload) {
+    const box = qs('#odMoneyCard', main); if (!box || window.GYA_DEMO) return;
+    const mf = await moneyFeatures(); if (!mf.refunds && !mf.invoices) return;
+    const m = await server('order-money', { order_id: o.id });
+    if (m.refunds) { const old = qs('#odRefundHint', main); if (old) old.remove(); }
+    const paid = !!o.paid_at;
+    const refundsHtml = !m.refunds ? '' : `<h3>Refunds</h3>
+      ${m.refunded_cents ? `<p><b>${m.refunded_cents >= o.total_cents ? 'Refunded in full' : 'Partly refunded'}</b>: ${$c(m.refunded_cents)} of ${$c(o.total_cents)}${m.left_cents > 0 ? ` · ${$c(m.left_cents)} left` : ''}</p>` : paid ? `<p class="gya-muted">Nothing refunded. ${$c(o.total_cents)} paid by ${esc(m.method)}.</p>` : '<p class="gya-muted">Not paid, so there is nothing to refund.</p>'}
+      ${m.rows.length ? `<ul class="gya-mini gya-refunds">${m.rows.map(r => { const st = r.unconfirmed ? 'unconfirmed' : r.status; return `<li><b>${$c(r.amount_cents)}</b> <span class="gya-st gya-st-${(R_ST[st] || ['', 'off'])[1]}">${(R_ST[st] || [st])[0]}</span>
+        <br><span class="gya-muted">${dtt(r.created_at)} · ${esc(r.reason || '')}${r.source !== 'dashboard' ? ` (made in ${r.source === 'stripe' ? 'Stripe' : 'PayPal'})` : r.admin_email ? ` · ${esc(r.admin_email)}` : ''}</span>
+        ${r.note ? `<br><span class="gya-muted">${esc(r.note)}</span>` : ''}${r.status === 'failed' && r.failure ? `<br><span class="gya-warn-t">${esc(r.failure)}</span>` : ''}
+        ${r.unconfirmed ? `<br><span class="gya-warn-t">${UNCONF}</span>` : ''}
+        ${r.status === 'pending' ? `<br><button class="gya-btn gya-btn-line gya-btn-sm" data-chk="${esc(r.id)}">Check refund</button>` : ''}
+        ${r.has_note ? `<br><button class="gya-btn gya-btn-line gya-btn-sm" data-adj="${esc(r.id)}" data-adjno="${esc(r.adjustment_number)}">Adjustment note ${esc(r.adjustment_number)}</button>` : ''}</li>`; }).join('')}</ul>` : ''}
+      ${paid && m.left_cents > 0 ? (m.rows.some(r => r.unconfirmed) ? '<p class="gya-muted">Refunds are paused on this order until the refund above is checked.</p>' : m.block ? `<p class="gya-warn-t">${esc(m.block)}</p>` : '<button class="gya-btn gya-btn-line" id="odRefund">Refund…</button>') : ''}
+      <p class="gya-muted gya-small">Refunds made in Stripe or PayPal show here automatically. A refund doesn't give back a discount code's use.</p>`;
+    const inv = m.invoice;
+    const invoiceHtml = !m.invoices ? '' : `<h3 ${m.refunds ? 'style="margin-top:18px"' : ''}>Tax invoice</h3>
+      ${!m.details_complete ? detailsWarn() : ''}
+      ${inv ? `<dl class="gya-dl"><dt>Invoice</dt><dd><b>${esc(inv.number)}</b></dd><dt>Dated</dt><dd>${dt(inv.issued_at)}</dd><dt>Emailed</dt><dd>${inv.sent_at ? dtt(inv.sent_at) : '<span class="gya-muted">Not yet</span>'}</dd>
+          ${m.buyer.business ? `<dt>Business</dt><dd>${esc(m.buyer.business)}</dd>` : ''}${m.buyer.abn ? `<dt>Their ABN</dt><dd>${esc(m.buyer.abn)}${m.buyer.abn_ok === false ? ' <span class="gya-warn-t">(doesn\'t pass the ABN check: ask the customer)</span>' : ''}</dd>` : ''}</dl>
+        ${inv.has_pdf ? '<div class="gya-row"><button class="gya-btn gya-btn-line gya-btn-sm" id="odInvDl">Download invoice</button><button class="gya-btn gya-btn-line gya-btn-sm" id="odInvSend">Resend invoice</button></div>'
+          : `<p class="gya-warn-t">The invoice PDF couldn't be made at the time.</p>${m.details_complete ? '<button class="gya-btn gya-btn-line gya-btn-sm" id="odInvGen">Make the invoice PDF</button>' : ''}`}
+        <div id="odInvForm"></div>`
+      : paid ? `<p class="gya-muted">No tax invoice yet.</p>${m.details_complete ? '<button class="gya-btn gya-btn-line gya-btn-sm" id="odInvGen">Generate invoice</button><p class="gya-muted gya-small">Gives this order the next invoice number, dated with its payment date. It isn\'t emailed until you press Resend invoice.</p>' : ''}`
+      : '<p class="gya-muted">A tax invoice is made once the order is paid.</p>'}`;
+    box.innerHTML = `<section class="gya-card">${refundsHtml}${invoiceHtml}</section>`;
+    qsa('[data-adj]', box).forEach(b => b.onclick = () => busy(b, async () => { const r = await server('invoice-url', { refund_id: b.dataset.adj }); await savePdf(r.url, `Adjustment note ${b.dataset.adjno}.pdf`); }));
+    const dl = qs('#odInvDl', box); if (dl) dl.onclick = () => busy(dl, async () => { const r = await server('invoice-url', { order_id: o.id }); await savePdf(r.url, `Tax invoice ${inv.number}.pdf`); });
+    const gen = qs('#odInvGen', box); if (gen) gen.onclick = () => busy(gen, async () => { const r = await server('invoice-generate', { order_id: o.id }); toast(`Tax invoice ${r.number} ready`); reload(); });
+    wireCheck(box, reload);
+    const snd = qs('#odInvSend', box); if (snd) snd.onclick = () => {
+      const f = qs('#odInvForm', box);
+      f.innerHTML = `${ui.field('Send to', ui.text('invto', o.email, 'type="email" autocomplete="off"'), 'The customer, or another address such as their accounts team.')}
+        <div class="gya-row"><button class="gya-btn gya-btn-red gya-btn-sm" id="odInvGo">Send invoice</button><button class="gya-btn gya-btn-line gya-btn-sm" id="odInvX">Cancel</button></div>`;
+      qs('#odInvX', f).onclick = () => { f.innerHTML = ''; };
+      qs('#odInvGo', f).onclick = e => busy(e.target, async () => { const r = await server('invoice-resend', { order_id: o.id, to: qs('[name=invto]', f).value.trim() });
+        toast(`Invoice ${r.status === 'logged' ? 'recorded' : 'sent'} to ${r.to}`); reload(); });
+    };
+    const rf = qs('#odRefund', box); if (rf) rf.onclick = () => refundForm(main, o, m, reload);
+  }
+
+  // Step 1: how much and why. Step 2: confirm. The amount is checked again on the server.
+  function refundForm(main, o, m, reload) {
+    const form = qs('#odForm', main), key = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()) + Math.random();
+    const leftTxt = $c(m.left_cents);
+    form.innerHTML = ui.card(`Refund <span class="gya-muted" style="font-weight:400">· ${esc(o.number)}</span>`, `
+      <p>Paid ${$c(o.total_cents)} by ${esc(m.method)}${m.refunded_cents ? `, ${$c(m.refunded_cents)} already refunded` : ''}. Up to <b>${leftTxt}</b> can be refunded.</p>
+      <fieldset class="gya-fs"><legend>How much?</legend>
+        <label class="gya-radio"><input type="radio" name="rkind" value="full" checked><span><b>${m.refunded_cents ? 'Everything that\'s left' : 'Full refund'} (${leftTxt})</b></span></label>
+        <label class="gya-radio"><input type="radio" name="rkind" value="part"><span><b>Part refund</b><small>Enter the amount, including GST.</small></span></label></fieldset>
+      <div id="rAmt" hidden>${ui.field('Amount to refund (AUD)', `<div class="gya-affix gya-affix-l"><span>$</span>${ui.text('ramount', '', 'inputmode="decimal" placeholder="0.00" autocomplete="off"')}</div>`, `At most ${leftTxt}.`)}</div>
+      ${ui.field('Reason', ui.select('rreason', [['', 'Choose a reason'], ...m.reasons.map(r => [r, r])], ''))}
+      ${ui.field('Note (optional, required for Other)', ui.text('rnote', '', 'maxlength="500" placeholder="For example: customer cancelled before printing"'))}
+      <div class="gya-checks">${ui.check('rnotify', true, 'Email the customer a refund confirmation')}</div>
+      <p class="gya-muted gya-small">A refund doesn't give back a discount code's use.${o.status === 'cancelled' ? '' : ' If this refunds the whole order it will show as Refunded.'}</p>
+      <div class="gya-row"><button class="gya-btn gya-btn-red" id="rNext">Continue</button><button class="gya-btn gya-btn-line" id="rBack">Go back</button></div>`, 'id="odConfirm"');
+    const v = n => { const el = qs(`[name=${n}]`, form); return el ? el.value.trim() : ''; };
+    qsa('[name=rkind]', form).forEach(x => x.onchange = () => { qs('#rAmt', form).hidden = qs('[name=rkind]:checked', form).value !== 'part'; });
+    qs('#rBack', form).onclick = () => { form.innerHTML = ''; };
+    qs('#rNext', form).onclick = () => {
+      const full = qs('[name=rkind]:checked', form).value === 'full';
+      const cents = full ? m.left_cents : Math.round(Number(v('ramount').replace(/[$,\s]/g, '')) * 100);
+      if (!full && !(cents > 0)) return toast('Enter the amount to refund, for example 25.00.', true);
+      if (cents > m.left_cents) return toast(`You can refund at most ${leftTxt}.`, true);
+      if (!v('rreason')) return toast('Choose a reason for the refund.', true);
+      if (v('rreason') === 'Other' && !v('rnote')) return toast('Add a note explaining the refund.', true);
+      const notify = qs('[name=rnotify]', form).checked, reason = v('rreason'), note = v('rnote');
+      form.innerHTML = ui.card('Confirm the refund', `
+        <dl class="gya-dl gya-dl-big"><dt>Refund</dt><dd><b>${$c(cents)}</b>${full ? ' (everything left on this order)' : ''}</dd><dt>To</dt><dd>${esc(m.method)}, the card or account the customer paid with</dd>
+          <dt>Order</dt><dd>${esc(o.number)} · ${esc(o.name || o.email)}</dd><dt>Reason</dt><dd>${esc(reason)}${note ? `: ${esc(note)}` : ''}</dd>
+          <dt>Customer email</dt><dd>${notify ? `Yes, to ${esc(o.email)}` : 'No'}</dd></dl>
+        <p class="gya-warn" style="margin:12px 0"><b>This can't be undone.</b> The money goes back to the customer straight away and usually shows in their account within 5 to 10 business days.</p>
+        <div class="gya-row"><button class="gya-btn gya-btn-red" id="rGo">Refund ${$c(cents)}</button><button class="gya-btn gya-btn-line" id="rBack2">Go back</button></div>`, 'id="odConfirm"');
+      qs('#rBack2', form).onclick = () => refundForm(main, o, m, reload);
+      qs('#rGo', form).onclick = e => busy(e.target, async () => {
+        try {
+          const r = await server('order-refund', { order_id: o.id, full, amount: full ? undefined : (cents / 100).toFixed(2), reason, note, notify, request_key: key });
+          if (r.status === 'unconfirmed') { form.innerHTML = `<p class="gya-warn"><b>Not confirmed yet.</b> ${esc(r.message)}</p>`; reload(); return; }
+          toast(r.status === 'succeeded' ? `Refunded ${$c(r.amount_cents)}` : `Refund of ${$c(r.amount_cents)} accepted. ${m.method} will confirm it shortly.`);
+          form.innerHTML = ''; reload();
+        } catch (err) {
+          const d = err.data || {};
+          // Only a clear refusal means nothing was refunded. Anything else (no connection, the server timing out) may have gone through.
+          form.innerHTML = d.refund_failed ? `<p class="gya-warn"><b>The refund didn't go through.</b> ${esc(err.message)} Nothing was refunded.</p>`
+            : d.refund_blocked || d.refund_unconfirmed || (err.status >= 400 && err.status < 500) ? `<p class="gya-warn">${esc(err.message)}</p>`
+            : `<p class="gya-warn"><b>We couldn't confirm the result.</b> ${esc(err.message)} Please don't refund again: reload the order and check the Refunds box. If the refund shows as Not confirmed yet, press Check refund.</p>`;
+          throw err;
+        }
+      });
+      form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function businessPage(main) {
+    if (window.GYA_DEMO) { main.innerHTML = head('Business details', 'Shown on tax invoices.') + '<p class="gya-note">Tax invoices are made on the shop server, so they are not part of this demo.</p>'; return; }
+    const r = await server('business-get', {});
+    if (!r.ready) { main.innerHTML = head('Business details', 'Shown on every tax invoice and adjustment note.') + `<p class="gya-warn">${r.enabled ? 'The database update for invoices hasn\'t been run yet. Run the refunds and invoices SQL file in Supabase (see the README), then reload this page.' : 'Tax invoices are switched off (INVOICES_ENABLED is not true in Vercel), so these details aren\'t used yet.'}</p>`; return; }
+    const b = r.details || {};
+    main.innerHTML = head('Business details', 'Shown on every tax invoice and adjustment note. Only admins can change these.') + `
+      ${r.complete ? '<p class="gya-note">Tax invoices are being made for paid orders.</p>' : '<p class="gya-warn">No tax invoices are made until the legal name and ABN are filled in.</p>'}
+      <div class="gya-grid2 gya-biz"><div>
+        <section class="gya-card" id="bizForm"><h3>Seller details</h3>
+          ${ui.field('Legal business name (required)', ui.text('legal_name', b.legal_name || '', 'maxlength="200" autocomplete="off"'), 'Exactly as registered against the ABN, for example "Avanti Print Pty Ltd".')}
+          ${ui.field('Trading name', ui.text('trading_name', b.trading_name || '', 'maxlength="200"'), 'The name customers know, for example Avanti Print & Design.')}
+          ${ui.field('ABN (required)', ui.text('abn', b.abn || '', 'maxlength="14" inputmode="numeric" autocomplete="off" placeholder="11 digits"'), '<span id="bizAbnHint">Checked with the ABN check digits when you save.</span>')}
+          ${ui.field('Address', ui.area('address', b.address || '', 3), 'Printed under the business name.')}
+          <div class="gya-grid2">${ui.field('Phone', ui.text('phone', b.phone || '', 'maxlength="60"'))}${ui.field('Email', ui.text('email', b.email || '', 'type="email" maxlength="200"'))}</div>
+          ${ui.field('Invoice footer (optional)', ui.area('invoice_footer', b.invoice_footer || '', 2, 'maxlength="600"'), 'A short line at the bottom of each invoice, for example a thank you or payment terms.')}
+          <div class="gya-row"><button class="gya-btn gya-btn-red" id="bizSave">Save details</button></div></section>
+      </div><div>
+        <section class="gya-card"><h3>Logo (optional)</h3>${r.logo_url ? `<p><img src="${esc(r.logo_url)}" alt="Invoice logo" style="max-width:220px;max-height:80px"></p>` : '<p class="gya-muted">No logo: the business name is printed at the top instead.</p>'}
+          <input type="file" id="bizLogo" accept="image/png,image/jpeg"><p class="gya-muted gya-small">PNG or JPEG, up to 500 KB. A wide logo works best.</p>
+          ${r.logo_url ? '<button class="gya-btn gya-btn-line gya-btn-sm" id="bizLogoRm">Remove logo</button>' : ''}</section>
+        <section class="gya-card"><h3>How invoices work</h3><ul class="gya-mini gya-dc-help">
+          <li>Every paid order gets a tax invoice numbered AV-000001, AV-000002 and so on, emailed to the customer with the PDF attached.</li>
+          <li>Each refund gets an adjustment note (AN-000001, ...) that refers to the original invoice.</li>
+          <li>Prices include GST, so the GST shown is one eleventh of the total paid.</li>
+          <li>Business customers can add their business name and ABN at checkout.</li></ul></section>
+      </div></div>`;
+    const f = qs('#bizForm', main), val = n => qs(`[name=${n}]`, f).value.trim();
+    qsa('input, textarea', f).forEach(x => x.addEventListener('input', () => G.markDirty()));
+    const abnIn = qs('[name=abn]', f), hint = qs('#bizAbnHint', main);
+    const abnOk = s => { const d = s.replace(/\s+/g, ''); if (!/^\d{11}$/.test(d)) return false; const n = d.split('').map(Number); n[0] -= 1; return n.reduce((t, x, i) => t + x * [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19][i], 0) % 89 === 0; };
+    abnIn.oninput = () => { const s = abnIn.value.trim(); hint.textContent = !s ? 'Checked with the ABN check digits when you save.' : abnOk(s) ? 'This ABN passes the check.' : 'This doesn\'t look like a valid ABN yet (11 digits).'; hint.className = s && !abnOk(s) ? 'gya-warn-t' : ''; };
+    qs('#bizSave', main).onclick = e => busy(e.target, async () => {
+      const res = await server('business-save', { legal_name: val('legal_name'), trading_name: val('trading_name'), abn: val('abn'), address: val('address'), phone: val('phone'), email: val('email'), invoice_footer: val('invoice_footer') });
+      G.markClean(); MF = null; toast(res.complete ? 'Business details saved. Tax invoices are on.' : 'Saved. Add the legal name and ABN to start making invoices.'); businessPage(main);
+    });
+    const lf = qs('#bizLogo', main); lf.onchange = () => { const file = lf.files[0]; if (!file) return;
+      if (file.size > 500000) return toast('Please use an image smaller than 500 KB.', true);
+      const rd = new FileReader(); rd.onload = () => busy(lf, async () => { await server('business-logo', { data: rd.result }); toast('Logo saved'); businessPage(main); }); rd.readAsDataURL(file); };
+    const rm = qs('#bizLogoRm', main); if (rm) rm.onclick = () => busy(rm, async () => { await server('business-logo', { remove: true }); toast('Logo removed'); businessPage(main); });
+  }
+  G.section({ id: 'business', label: 'Business details', order: 31.5, render: main => businessPage(main) });
 
   /* ---------------- Discount codes ----------------
      Codes are checked and worked out on the shop server; this page only sets them up. One code per order. */
@@ -3833,7 +4001,7 @@ const GYA = (() => {
         <section class="gya-card"><h3>Details</h3>${ui.field('Name', ui.text('name', c.name || ''))}${ui.field('Phone', ui.text('phone', c.phone || ''))}
           <div class="gya-grid2">${ui.field('State', ui.select('state', [['', '–'], ...STATES], c.state || ''))}${ui.field('Tags', ui.text('tags', (c.tags || []).join(', ')), 'Comma separated, e.g. wholesale, events')}</div>
           <button class="gya-btn gya-btn-red" id="cuSave">Save details</button></section>
-        <section class="gya-card"><h3>Orders</h3>${orders.length ? `<table class="gya-table"><tbody>${orders.map(orderRow).join('')}</tbody></table>` : empty('No orders.')}</section></div>
+        <section class="gya-card"><h3>Orders</h3>${orders.length ? `<table class="gya-table"><tbody>${orders.map(o => orderRow(o)).join('')}</tbody></table>` : empty('No orders.')}</section></div>
       <div><section class="gya-card"><h3>Marketing consent</h3><p>${c.suppressed ? pill('suppressed') : pill(c.marketing_status)}</p>
           ${c.consent_basis ? `<dl class="gya-dl"><dt>How</dt><dd>${esc(BASIS[c.consent_basis] || c.consent_basis)}</dd><dt>When</dt><dd>${dtt(c.consent_at)}</dd>${c.consent_source ? `<dt>Source</dt><dd>${esc(c.consent_source)}</dd>` : ''}${c.consent_ip ? `<dt>IP address</dt><dd>${esc(c.consent_ip)}</dd>` : ''}</dl>` : ''}
           ${c.suppressed ? `<p class="gya-warn-t">${esc(c.suppressed_reason || 'Suppressed')}. Marketing email is blocked for this address.</p>` : ''}
@@ -5148,6 +5316,12 @@ async function wireCheckout(params){
   try{ cfg = await apiCall('/checkout?action=config'); }catch(e){ if(live()) offline(); return; }
   if(!live()) return;
   if(!cfg.providers || !cfg.providers.length){ offline(); return; }
+  // tax invoices on: business buyers can add their business name and ABN (a mistyped ABN is a gentle warning only)
+  if(cfg.invoices){ const lab=$('label[for="coCompany"]'); if(lab) lab.innerHTML='Business name <span class="co-opt">optional</span>';
+    $('#coCompany').closest('.two').insertAdjacentHTML('afterend', `<div class="two"><div><label for="coAbn">ABN <span class="co-opt">optional</span></label><input id="coAbn" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="For a tax invoice in your business name"><p class="co-abn-msg" id="coAbnMsg" role="status"></p></div><div></div></div>`);
+    const abnOk=v=>{ const d=v.replace(/\s+/g,''); if(!/^\d{11}$/.test(d)) return false; const n=d.split('').map(Number); n[0]-=1; return n.reduce((t,x,i)=>t+x*[10,1,3,5,7,9,11,13,15,17,19][i],0)%89===0; };
+    const chk=()=>{ const v=$('#coAbn').value.trim(); $('#coAbnMsg').textContent = v && !abnOk(v) ? "That ABN doesn't look right (it should be 11 digits). You can still place your order." : ''; };
+    $('#coAbn').addEventListener('blur', chk); $('#coAbn').addEventListener('input', ()=>{ if($('#coAbnMsg').textContent) chk(); }); }
   try{ q = await apiCall('/checkout?action=quote', {lines:cartForServer()}); }catch(e){ if(!live()) return; $('#coDelivery').innerHTML=''; $('#coPay').innerHTML=''; note(esc(e.message), true); return; }
   if(!live()) return;
   q.lines.forEach((l,i)=>{ const el=$$('#coLines .co-price')[i]; if(el) el.textContent=cents$(l.line_cents); });
@@ -5168,7 +5342,7 @@ async function wireCheckout(params){
       const lines=cartForServer();
       await uploadArtwork(lines);
       const r = await apiCall('/checkout?action=create', { provider:f.querySelector('input[name=provider]:checked').value, lines,
-        customer:{ email:$('#coEmail').value, name:$('#coName').value, phone:$('#coPhone').value, company:$('#coCompany').value,
+        customer:{ email:$('#coEmail').value, name:$('#coName').value, phone:$('#coPhone').value, company:$('#coCompany').value, ...($('#coAbn')&&$('#coAbn').value.trim()?{abn:$('#coAbn').value.trim()}:{}),
           address:{ line1:$('#coLine1').value, line2:$('#coLine2').value, suburb:$('#coSuburb').value, state:$('#coState').value, postcode:$('#coPostcode').value } },
         note:$('#coNote').value, marketing_opt_in:$('#coOptin').checked, campaign_id:campaignRef(), ...(code?{discount_code:code}:{}) });
       location.href = r.redirect_url;
@@ -5248,6 +5422,8 @@ async function wireOrder(id, params){
       <div class="co-row"><span>Delivery${o.delivery_method?`<br><small class="co-muted">${esc(o.delivery_method)}</small>`:''}</span><span>${cents$(o.delivery_cents)}</span></div>
       ${o.shipping_discount_cents?`<div class="co-row co-disc"><span>Shipping discount (${esc(o.discount_code||'')})</span><span>-${cents$(o.shipping_discount_cents)}</span></div>`:''}
       <div class="co-row co-total"><span>Total (AUD)</span><span>${cents$(o.total_cents)}</span></div><div class="co-muted co-small">Includes GST of ${cents$(o.gst_cents)}</div>
+      ${o.refunded_cents?`<div class="co-row co-disc"><span>Refunded</span><span>-${cents$(o.refunded_cents)}</span></div>`:''}
+      ${o.invoice_number?`<p style="margin:12px 0 0"><a class="btn btn-line btn-sm" href="/api/checkout?action=invoice&order=${encodeURIComponent(id)}&t=${encodeURIComponent(t||'')}" target="_blank" rel="noopener">Download tax invoice ${esc(o.invoice_number)}</a></p>`:''}
       ${o.delivery_quote_required?'<p class="co-muted co-small">Courier delivery for some items will be quoted separately before dispatch.</p>':''}</div>
       ${artUploadHtml(o)}
       <p style="margin-top:24px"><a class="btn btn-line" href="#/shop">Keep shopping</a> <a class="btn btn-line" href="#/contact">Questions? Contact us</a></p>`;

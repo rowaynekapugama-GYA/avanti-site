@@ -6,6 +6,7 @@ import { markPaid, receiveArtwork } from './_lib/effects.js';
 import { customerView } from './_lib/shipping/engine.js';
 import { receive } from './webhooks.js';
 import { discountsReady } from './_lib/discounts.js';
+import { invoicesReady, signedFile } from './_lib/invoices.js';
 
 const UPLOAD_OK = ['paid', 'in_production'];   // artwork can be added online until the order is dispatched
 
@@ -21,9 +22,11 @@ export const GET = handle(async (req) => {
   const cfg = config(), u = new URL(req.url), action = u.searchParams.get('action');
   if (action === 'config') {
     const connected = !!(cfg.supabaseUrl && cfg.serviceKey);
-    let discounts = false;   // the "Have a discount code?" box only shows when codes are switched on and the tables exist
+    let discounts = false, invoices = false;   // the "Have a discount code?" box only shows when codes are switched on and the tables exist
     if (connected) { try { discounts = await discountsReady(db(cfg), cfg); } catch (e) { discounts = false; } }
-    return json({ providers: connected ? providers(cfg) : [], currency: 'AUD', discounts });
+    // tax invoices on: checkout asks business buyers for their business name and ABN (both optional)
+    if (connected) { try { invoices = await invoicesReady(db(cfg), cfg); } catch (e) { invoices = false; } }
+    return json({ providers: connected ? providers(cfg) : [], currency: 'AUD', discounts, ...(invoices ? { invoices: true } : {}) });
   }
 
   if (action === 'status') {
@@ -36,7 +39,16 @@ export const GET = handle(async (req) => {
       can_upload_artwork: UPLOAD_OK.includes(o.status),
       subtotal_cents: o.subtotal_cents, delivery_cents: o.delivery_cents, delivery_method: o.delivery_method, total_cents: o.total_cents, gst_cents: o.gst_cents,
       discount_code: o.discount_code || null, product_discount_cents: o.product_discount_cents || 0, shipping_discount_cents: o.shipping_discount_cents || 0,
-      delivery_quote_required: o.delivery_quote_required, carrier: o.carrier, tracking_number: o.tracking_number, tracking_url: trackingUrl(o) || null });
+      delivery_quote_required: o.delivery_quote_required, carrier: o.carrier, tracking_number: o.tracking_number, tracking_url: trackingUrl(o) || null,
+      ...(o.invoice_pdf_path ? { invoice_number: o.invoice_number } : {}), ...(o.refunded_cents ? { refunded_cents: o.refunded_cents } : {}) });
+  }
+
+  // The customer's tax invoice: their order link (with its private token) opens a fresh signed link that
+  // expires after 10 minutes. The PDF itself is never public.
+  if (action === 'invoice') {
+    const d = db(cfg), o = await loadOrder(d, u.searchParams.get('order') || '');
+    if (!o || o.public_token !== u.searchParams.get('t') || !o.invoice_pdf_path) throw new HttpError(404, 'Invoice not found.');
+    return redirect(await signedFile(cfg, o.invoice_pdf_path, 600), 302);
   }
 
   // PayPal sends the customer back here after they approve. We capture server-side; the payment

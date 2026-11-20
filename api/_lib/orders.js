@@ -5,6 +5,7 @@ import { loadShippingConfig, shippingFor } from './shipping/store.js';
 import { UNAVAILABLE, METHOD, serialiseQuote } from './shipping/engine.js';
 import { STATE_RANGES } from './shipping/validate.js';
 import { normaliseCode, CODE_RE, MESSAGES as DISCOUNT_MESSAGES, checkCode, discountAmounts, discountsReady, findCode, usesByEmail, gstIn } from './discounts.js';
+import { invoicesReady, abnDigits } from './invoices.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -211,6 +212,12 @@ export async function createPendingOrder(d, body) {
     provider: body.provider, marketing_opt_in: !!body.marketing_opt_in, campaign_id: campaign,
     customer_note: String(body.note || '').trim().slice(0, 1000) || null,
   };
+  // business buyers (tax invoices switched on): the business name and ABN go on their invoice. The ABN is saved
+  // as digits only, even if it fails the check (the checkout warns but never blocks an order; the dashboard flags it).
+  if (await invoicesReady(d, config()).catch(() => false)) {
+    const abn = abnDigits(body.customer && body.customer.abn).replace(/[^\d]/g, '').slice(0, 11);
+    Object.assign(row, { buyer_business_name: cust.company, buyer_abn: abn || null });
+  }
   if (q.discount && q.discount.ok) Object.assign(row, { discount_code: q.discount.code, discount_code_id: q.discount.id, discount_type: q.discount.kind,
     discount_applies_to: q.discount.applies_to, discount_value: q.discount.value, product_discount_cents: q.productDiscount, shipping_discount_cents: q.shippingDiscount });
   // the full shipping calculation, saved with the order and never changed afterwards

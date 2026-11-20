@@ -6,7 +6,8 @@
 import { config, storageSign } from './core.js';
 import { transition, loadOrder, recordCustomer } from './orders.js';
 import { redeem } from './discounts.js';
-import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail, artworkRequestEmail, artworkReceivedEmail, needsArtwork } from './email.js';
+import { sendEmail, orderEmail, staffOrderEmail, customerNoteEmail, artworkRequestEmail, artworkReceivedEmail, needsArtwork, invoiceEmail } from './email.js';
+import { issueAndSendInvoice, invoicesReady, ensureInvoice } from './invoices.js';
 
 // Staff can switch order emails off instantly in the dashboard (server-only flag "order_emails" = false).
 // ORDER_EMAILS_ENABLED=false in Vercel switches them off too. If the flag can't be read, behave as before.
@@ -150,7 +151,26 @@ export async function receiveArtwork(d, o, item, files, cfg = config()) {
 }
 
 // opts.notify = false: staff unticked "Email the customer" for this change.
+// opts.quiet = true: a full refund moved the order to Refunded; the refund email is the customer's message.
 export async function afterTransition(d, orderId, from, to, cfg = config(), opts = {}, meta = {}) {
+  await afterTransitionMain(d, orderId, from, to, cfg, opts, meta);
+  if (to === 'paid') await invoiceAfterPayment(d, orderId, cfg);
+}
+// Tax invoice once an order is paid (when invoices are switched on). Never throws.
+export async function invoiceAfterPayment(d, orderId, cfg = config()) {
+  try {
+    if (!(await invoicesReady(d, cfg))) return;
+    const o = await loadOrder(d, orderId);
+    if (!o || !o.paid_at) return;
+    if (!(await orderEmailsOn(d, cfg))) {   // order emails switched off: the invoice is still made, just not emailed
+      const r = await ensureInvoice(d, o, cfg);
+      if (r.ok) await timelineNote(d, o, `Tax invoice ${r.order.invoice_number} created. Order emails are switched off, so it wasn't emailed.`);
+      return;
+    }
+    await issueAndSendInvoice(d, o, { cfg, sendEmail, invoiceEmail });
+  } catch (err) { console.error('invoiceAfterPayment', orderId, err); }
+}
+async function afterTransitionMain(d, orderId, from, to, cfg, opts, meta) {
   let o = null;
   try {
     o = await loadOrder(d, orderId);
@@ -163,6 +183,7 @@ export async function afterTransition(d, orderId, from, to, cfg = config(), opts
   if (!o) return;
   // a discount code counts as used only once the payment has gone through (never throws)
   if (to === 'paid' && o.discount_code_id) await redeem(d, o);
+  if (opts.quiet) return;
   // an unpaid checkout that is cancelled: the customer isn't emailed. If Stripe or PayPal said the
   // payment failed, the Avanti team is told (WooCommerce's "Failed order" email); tidy-ups are silent.
   if (to === 'cancelled' && from === 'pending_payment') {
@@ -219,5 +240,9 @@ export async function markPaid(d, order, { actor, providerRef, providerStatus, a
   // A repeated payment notice for an order that is already paid: make sure its discount code use was counted
   // (if the first notice stopped part way, this catches it up). Counting is safe to repeat: it only ever counts once.
   if (!res.changed && order.discount_code_id && ['paid', 'in_production', 'dispatched', 'delivered'].includes(order.status)) await redeem(d, order);
+  // ... and that its tax invoice was made and sent (sent once only, whatever happens). Only for a recent payment
+  // on a live order: a late repeat notice never emails an invoice for an old, cancelled or refunded order.
+  if (!res.changed && !res.mismatch && order.paid_at && !['cancelled', 'refunded'].includes(order.status)
+      && Date.now() - new Date(order.paid_at).getTime() < 3 * 86400000) await invoiceAfterPayment(d, order.id, cfg);
   return res;
 }

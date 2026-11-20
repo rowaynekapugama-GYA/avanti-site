@@ -61,6 +61,11 @@ export function config() {
     // Discount codes at checkout. Off unless DISCOUNTS_ENABLED=true; also off while the discount tables
     // don't exist yet, so the live checkout works exactly as before until the database update has been run.
     discounts: { enabled: E('DISCOUNTS_ENABLED', 'false').trim().toLowerCase() === 'true' },
+    // Refunds from the dashboard, and tax invoices emailed after payment. Each is off unless set to true,
+    // and stays off while its database tables don't exist yet, so the live site works exactly as before.
+    refunds: { enabled: E('REFUNDS_ENABLED', 'false').trim().toLowerCase() === 'true' },
+    invoices: { enabled: E('INVOICES_ENABLED', 'false').trim().toLowerCase() === 'true' },
+    vercelEnv: E('VERCEL_ENV'),
     cronSecret: E('CRON_SECRET'),
   };
 }
@@ -137,6 +142,26 @@ export async function requireAdmin(req, cfg = config()) {
 export async function audit(d, actor, action, target_type, target_id, data) {
   try { await d.insert('audit_log', { actor, action, target_type, target_id: target_id == null ? null : String(target_id), data: data || null }); }
   catch (e) { console.error('audit log failed', e.message); }
+}
+
+const storageHeaders = (cfg, extra = {}) => {
+  const h = { apikey: cfg.serviceKey, ...extra };
+  if (isJwt(cfg.serviceKey)) h.Authorization = `Bearer ${cfg.serviceKey}`;
+  return h;
+};
+const storagePath = path => String(path).split('/').map(encodeURIComponent).join('/');
+// Save a file into a private bucket (replacing any file already at that path).
+export async function storageUpload(cfg, bucket, path, bytes, contentType) {
+  const r = await fetch(`${cfg.supabaseUrl}/storage/v1/object/${bucket}/${storagePath(path)}`,
+    { method: 'POST', headers: storageHeaders(cfg, { 'Content-Type': contentType, 'x-upsert': 'true' }), body: bytes, signal: AbortSignal.timeout(8000) });
+  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(`Storage upload failed (${r.status}) ${t.slice(0, 200)}`); }
+  return path;
+}
+// Read a file from a private bucket (server only).
+export async function storageDownload(cfg, bucket, path) {
+  const r = await fetch(`${cfg.supabaseUrl}/storage/v1/object/authenticated/${bucket}/${storagePath(path)}`, { headers: storageHeaders(cfg), signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`Storage download failed (${r.status})`);
+  return Buffer.from(await r.arrayBuffer());
 }
 
 // A time-limited download link for a private file in Supabase Storage (e.g. customer artwork).

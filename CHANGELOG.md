@@ -1,5 +1,41 @@
 # Changelog
 
+## 20 November 2026: Refunds and tax invoices (version 2026.11.20)
+
+How-to for the Avanti team: `docs/HOW-TO-REFUNDS-AND-INVOICES.md`.
+
+**Before switching on:** run `supabase/migrations/20261120120000_refunds_invoices.sql` in the Supabase
+SQL Editor, enter the legal name and ABN in Dashboard > Business details, then set `REFUNDS_ENABLED=true`
+and `INVOICES_ENABLED=true` in Vercel and redeploy. Until then the site works exactly as before.
+
+- Refunds from the order page: full or part, a reason and note, an optional customer email, and a confirm
+  step. Stripe uses its Refunds API on the stored payment and PayPal refunds the stored capture, each with an
+  idempotency key, so a double click never refunds twice. The amount is checked in the database with the
+  order locked, so two staff can't refund more than was paid. If the provider refuses, its reason is shown
+  in plain words and nothing is recorded as refunded.
+- If Stripe or PayPal doesn't give a clear answer (a timeout, a dropped connection, a server error), the refund
+  is never marked as failed. It shows "Not confirmed yet", further refunds on that order wait, and Check refund
+  asks the provider what happened (sending the first request again with the same key, so it's paid once at most).
+- Refunds made directly in Stripe or PayPal are read back from their webhooks and listed on the order once.
+  Stripe refunds are also brought in when the order is opened. Orders refunded before this release, whose
+  amounts aren't known, are sent to Stripe or PayPal for any further refund.
+- Test payments (Stripe test keys, PayPal sandbox, the test gateway, Vercel previews) get TEST-AV- and
+  TEST-AN- numbers, so the real invoice numbers stay in sequence.
+- Orders show Refunded or Part refunded with the refunded total and what's left. Cancelled stays a separate
+  status, so an order can be cancelled and refunded.
+- Tax invoices: numbered AV-000001 upwards with no gaps, dated with the payment date, emailed once after
+  payment with the PDF attached and a secure download link. Stored in a private bucket. Download, resend or
+  generate (for older orders) from the order page.
+- Adjustment notes (AN-000001 upwards) for each refund, referring to the original invoice and showing the
+  GST in the refund. Attached to the refund email.
+- Business details page for the seller details printed on invoices. No invoice is made without the legal
+  name and ABN.
+- Checkout: optional Business name (the existing Company box) and ABN, with a gentle warning if the ABN
+  fails the check. Shown only while invoices are on.
+- Customer order page: "Download tax invoice" and any refunded amount.
+- Known limits: the provider's own receipt emails still go out unless switched off in Stripe; refunds don't
+  give a discount code's use back; an invoice can't be re-addressed after it's issued.
+
 ## 10 November 2026: Discount codes (version 2026.11.10)
 
 Discount codes for shipping or products, set up by staff in Dashboard > Discounts.

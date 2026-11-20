@@ -1247,3 +1247,399 @@ test('discounts: dashboard rules (admin only, validation, duplicates, delete vs 
   assert.ok(red.status >= 400, 'the public cannot count uses');
   delete process.env.DISCOUNTS_ENABLED;
 });
+
+// ---------- refunds from the dashboard, tax invoices, adjustment notes (20 Nov 2026) ----------
+const adm = (action, body = {}, tok) => call(admin.POST, `/api/admin?action=${action}`, { method: 'POST', body, headers: auth(tok || adminToken) });
+const VALID_ABN = '51 824 753 556';   // the ATO's example ABN (passes the check)
+// Real-money mode against the mocks (live-style keys never leave this machine): real invoice numbers.
+const liveMode = () => { process.env.STRIPE_SECRET_KEY = 'rk_live_mock_only'; process.env.PAYPAL_ENV = 'live'; };
+const testMode = () => { process.env.STRIPE_SECRET_KEY = 'rk_test_123'; delete process.env.PAYPAL_ENV; };
+async function moneyReset({ refunds = true, invoices = true, details = true, live = true } = {}) {
+  await reset();
+  if (live) liveMode(); else testMode();
+  if (refunds) process.env.REFUNDS_ENABLED = 'true'; else delete process.env.REFUNDS_ENABLED;
+  if (invoices) process.env.INVOICES_ENABLED = 'true'; else delete process.env.INVOICES_ENABLED;
+  await d.remove('business_details', 'id=gte.0');
+  await d.update('invoice_counters', 'series=not.is.null', { last: 0 });
+  mocks.state.stripeRefunds.length = 0; mocks.state.paypalRefunds.length = 0; mocks.state.stripeRefundFail = null; mocks.state.paypalRefundFail = null;
+  mocks.state.stripeRefundStatus = 'succeeded'; mocks.state.stripeRefundLost = null; mocks.state.paypalRefundLost = null; mocks.state.paypalCaptureStatus = {};
+  if (details && invoices) {
+    const r = await adm('business-save', { legal_name: 'Example Signs Pty Ltd', trading_name: 'Avanti Print & Design', abn: VALID_ABN,
+      address: '1 Test Street, Smithfield NSW 2164', phone: '(02) 9729 0139', email: 'info@avantiprint.com.au', invoice_footer: 'Thank you for your business.' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+  }
+}
+const ppHdr = { 'paypal-transmission-sig': 'valid-signature', 'paypal-transmission-id': 't', 'paypal-transmission-time': 'now', 'paypal-cert-url': 'https://x', 'paypal-auth-algo': 'SHA256withRSA' };
+const postPaypal = ev => call(webhooks.POST, '/api/webhooks?provider=paypal', { method: 'POST', body: ev, headers: ppHdr });
+const orderRow = id => d.one('orders', `select=*&id=eq.${id}`);
+const refundRows = id => d.select('refunds', `select=*&order_id=eq.${id}&order=created_at`);
+async function paidStripe(extra) { const o = await newOrder('stripe', extra); assert.equal((await postStripe(stripeEvent(o))).status, 200); return o; }
+async function paidPaypal() {
+  const o = await newOrder('paypal'), ppId = o.row.provider_session_id; mocks.approve(ppId);
+  await call(checkout.GET, `/api/checkout?action=paypal-return&order=${o.order_id}&token=${ppId}`);
+  return { ...o, capture: `CAP-${ppId}` };
+}
+
+test('refunds and invoices: switched off (default) nothing changes', async () => {
+  await moneyReset({ refunds: false, invoices: false });
+  const cfgR = await call(checkout.GET, '/api/checkout?action=config');
+  assert.equal(cfgR.data.invoices, undefined);
+  const f = await adm('money-features'); assert.deepEqual([f.data.refunds, f.data.invoices], [false, false]);
+  const o = await paidStripe({ customer: { ...CUSTOMER, company: 'Buyer Co', abn: VALID_ABN } });
+  const row = await orderRow(o.order_id);
+  assert.equal(row.status, 'paid'); assert.equal(row.invoice_number, null); assert.equal(row.buyer_abn, null);
+  assert.equal(mocks.state.emails.filter(m => /tax invoice/i.test(m.subject)).length, 0);
+  const r = await adm('order-refund', { order_id: o.order_id, full: true, reason: 'Order cancelled' });
+  assert.equal(r.status, 409); assert.match(r.data.error, /switched off/);
+  assert.equal(mocks.state.stripeRefunds.length, 0);
+  // a refund made in Stripe still works the way it always has
+  mocks.state.stripeRefunds.push({ id: 're_x1', payment_intent: row.provider_ref, amount: row.total_cents, status: 'succeeded', metadata: {} });
+  await postStripe(stripeEvent(o, 'charge.refunded', { object: 'charge', payment_intent: row.provider_ref, amount: row.total_cents, amount_refunded: row.total_cents, refunded: true }));
+  assert.equal((await orderRow(o.order_id)).status, 'refunded');
+  assert.equal((await refundRows(o.order_id)).length, 0);
+});
+
+test('invoices: no invoice without the legal name and ABN; the ABN must pass the check', async () => {
+  await moneyReset({ details: false });
+  const bad = await adm('business-save', { legal_name: 'Example Signs Pty Ltd', abn: '51 824 753 557' });
+  assert.equal(bad.status, 400); assert.match(bad.data.error, /ABN check/);
+  const f = await adm('money-features'); assert.equal(f.data.invoices, true); assert.equal(f.data.details_complete, false);
+  const o = await paidStripe();
+  assert.equal((await orderRow(o.order_id)).invoice_number, null);
+  assert.ok((await events(o.order_id)).some(e => /No tax invoice was created: the business legal name or ABN is missing/.test(e.note || '')));
+  const g = await adm('invoice-generate', { order_id: o.order_id }); assert.equal(g.status, 409); assert.match(g.data.error, /Business details/);
+});
+
+test('invoices: emailed once after payment with the PDF; numbered; secure link; business buyer details', async () => {
+  await moneyReset();
+  const cfgR = await call(checkout.GET, '/api/checkout?action=config'); assert.equal(cfgR.data.invoices, true);
+  const o = await paidStripe({ customer: { ...CUSTOMER, company: 'Buyer Co Pty Ltd', abn: '51824753557' } });   // mistyped ABN: kept, not blocked
+  let row = await orderRow(o.order_id);
+  assert.equal(row.invoice_number, 'AV-000001'); assert.equal(row.invoice_issued_at, row.paid_at); assert.ok(row.invoice_pdf_path); assert.ok(row.invoice_sent_at);
+  assert.equal(row.buyer_business_name, 'Buyer Co Pty Ltd'); assert.equal(row.buyer_abn, '51824753557');
+  const inv = mocks.state.emails.filter(m => /^Your tax invoice from Avanti Print & Design \(order /.test(m.subject));
+  assert.equal(inv.length, 1); assert.equal(inv[0].to[0], 'jo.buyer@example.com');
+  assert.equal(inv[0].attachments.length, 1); assert.equal(inv[0].attachments[0].filename, 'Tax invoice AV-000001.pdf');
+  assert.equal(Buffer.from(inv[0].attachments[0].content, 'base64').subarray(0, 5).toString(), '%PDF-');
+  assert.match(inv[0].html, /action=invoice&amp;order=|action=invoice&order=/);
+  assert.ok(!/\u2014/.test(inv[0].html + inv[0].text), 'no em dashes in the email');
+  // the order confirmation still goes as before
+  assert.equal(mocks.state.emails.filter(m => /^Order confirmed/.test(m.subject)).length, 1);
+  // a repeated payment notice never sends it twice
+  await postStripe(stripeEvent(o)); await postStripe(stripeEvent(o));
+  assert.equal(mocks.state.emails.filter(m => /tax invoice/i.test(m.subject)).length, 1);
+  // customer's link: right token opens a short-lived signed file; wrong token does not
+  const ok = await call(checkout.GET, `/api/checkout?action=invoice&order=${o.order_id}&t=${o.token}`);
+  assert.equal(ok.status, 302); assert.match(ok.headers.get('location'), /\/storage\/v1\/object\/sign\/invoices\//);
+  const pdf = await fetch(ok.headers.get('location')); assert.equal(pdf.status, 200); assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+  assert.equal((await call(checkout.GET, `/api/checkout?action=invoice&order=${o.order_id}&t=wrong`)).status, 404);
+  // the private bucket is not readable without a signed link
+  const anon = await fetch(`${T.TEST_SUPABASE_URL}/storage/v1/object/authenticated/invoices/${row.invoice_pdf_path}`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.ok(anon.status >= 400, 'invoice PDFs are private');
+  // dashboard: download and resend to an accounts address
+  const u = await adm('invoice-url', { order_id: o.order_id }); assert.equal(u.status, 200); assert.match(u.data.url, /sign/);
+  const rs = await adm('invoice-resend', { order_id: o.order_id, to: 'accounts@buyerco.example' });
+  assert.equal(rs.status, 200); assert.equal(mocks.state.emails.filter(m => m.to[0] === 'accounts@buyerco.example' && /tax invoice/i.test(m.subject)).length, 1);
+  // the editor role can't touch any of it
+  for (const [a, b] of [['order-refund', { order_id: o.order_id, full: true, reason: 'Order cancelled' }], ['business-save', { legal_name: 'X', abn: VALID_ABN }], ['invoice-resend', { order_id: o.order_id }]])
+    assert.equal((await adm(a, b, editorToken)).status, 403, a);
+  assert.equal((await call(admin.POST, '/api/admin?action=order-refund', { method: 'POST', body: { order_id: o.order_id } })).status, 401);
+  const ed = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/refunds?select=id`, { headers: { apikey: T.TEST_ANON_KEY, Authorization: `Bearer ${editorToken}` } });
+  assert.ok(ed.status >= 400 || (await ed.json()).length === 0, 'editor must not read refunds');
+  const bz = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/business_details?select=id`, { headers: { apikey: T.TEST_ANON_KEY } });
+  assert.ok(bz.status >= 400 || (await bz.json()).length === 0, 'the public cannot read business details');
+  const rpc = await fetch(`${T.TEST_SUPABASE_URL}/rest/v1/rpc/invoice_assign`, { method: 'POST', headers: { apikey: T.TEST_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_order: o.order_id }) });
+  assert.ok(rpc.status >= 400, 'the public cannot take invoice numbers');
+});
+
+test('invoices: numbers have no gaps or duplicates when many orders are paid at once', async () => {
+  await moneyReset();
+  const orders = [];
+  for (let i = 0; i < 12; i++) orders.push(await newOrder('stripe'));
+  // all twelve payment notices at the same moment
+  const rs = await Promise.all(orders.map(o => postStripe(stripeEvent(o))));
+  rs.forEach(r => assert.equal(r.status, 200));
+  const nums = (await d.select('orders', `select=invoice_number&id=in.(${orders.map(o => o.order_id).join(',')})`)).map(r => r.invoice_number).sort();
+  assert.deepEqual(nums, Array.from({ length: 12 }, (_, i) => `AV-${String(i + 1).padStart(6, '0')}`));
+  // and straight at the database, twenty calls racing for the same few orders
+  const again = await Promise.all(orders.flatMap(o => [o, o]).map(o => d.rpc('invoice_assign', { p_order: o.order_id })));
+  assert.equal(new Set(again).size, 12);
+  assert.equal((await d.one('invoice_counters', 'select=last&series=eq.invoice')).last, 12);
+  assert.equal(mocks.state.emails.filter(m => /tax invoice/i.test(m.subject)).length, 12);
+});
+
+test('refunds (Stripe): partial then the rest, adjustment notes, emails, caps, repeats and webhooks never double count', async () => {
+  await moneyReset();
+  const o = await paidStripe(), total = (await orderRow(o.order_id)).total_cents, pi = (await orderRow(o.order_id)).provider_ref;
+  let info = await adm('order-money', { order_id: o.order_id });
+  assert.equal(info.data.left_cents, total); assert.equal(info.data.block, null); assert.equal(info.data.method, 'Card (Stripe)');
+  // partial refund of $10.00
+  let r = await adm('order-refund', { order_id: o.order_id, amount: '10.00', reason: 'Reprint or fault', note: 'One banner faded', notify: true, request_key: 'k1' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.status, 'succeeded'); assert.equal(r.data.refunded_cents, 1000); assert.equal(r.data.left_cents, total - 1000);
+  assert.equal(r.data.order_status, 'paid'); assert.equal(r.data.adjustment_number, null);   // number given just after; read it back
+  assert.equal(mocks.state.stripeRefunds.length, 1);
+  const sr = mocks.state.stripeRefunds[0];
+  assert.equal(sr.payment_intent, pi); assert.equal(sr.amount, 1000); assert.match(sr.idem, /^refund-/); assert.ok(sr.metadata.refund_id);
+  let rows = await refundRows(o.order_id);
+  assert.equal(rows.length, 1); assert.equal(rows[0].adjustment_number, 'AN-000001'); assert.ok(rows[0].adjustment_pdf_path); assert.equal(rows[0].provider_refund_id, sr.id);
+  const re = mocks.state.emails.filter(m => m.subject === 'Your refund from Avanti Print & Design');
+  assert.equal(re.length, 1); assert.match(re[0].text, /5 to 10 business days/); assert.equal(re[0].attachments[0].filename, 'Adjustment note AN-000001.pdf');
+  // the same request again (double click): nothing new happens
+  r = await adm('order-refund', { order_id: o.order_id, amount: '10.00', reason: 'Reprint or fault', note: 'One banner faded', request_key: 'k1' });
+  assert.equal(r.status, 200); assert.equal(r.data.repeated, true); assert.equal(mocks.state.stripeRefunds.length, 1);
+  // Stripe's own notices about that refund: recorded once
+  const ch = { object: 'charge', payment_intent: pi, amount: total, amount_refunded: 1000, refunded: false };
+  await postStripe(stripeEvent(o, 'charge.refunded', ch)); await postStripe(stripeEvent(o, 'refund.updated', { object: 'refund', id: sr.id, payment_intent: pi }));
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 1000); assert.equal((await refundRows(o.order_id)).length, 1);
+  // more than is left is refused, before anything reaches Stripe
+  r = await adm('order-refund', { order_id: o.order_id, amount: ((total - 999) / 100).toFixed(2), reason: 'Order cancelled' });
+  assert.equal(r.status, 400); assert.match(r.data.error, /at most/); assert.equal(mocks.state.stripeRefunds.length, 1);
+  // "Other" needs a note
+  r = await adm('order-refund', { order_id: o.order_id, amount: '1.00', reason: 'Other' }); assert.equal(r.status, 400);
+  // the rest: full refund, quietly moves the order to Refunded (the refund email is the customer's message)
+  const before = mocks.state.emails.length;
+  r = await adm('order-refund', { order_id: o.order_id, full: true, reason: 'Order cancelled', notify: true, request_key: 'k2' });
+  assert.equal(r.status, 200); assert.equal(r.data.refunded_cents, total); assert.equal(r.data.left_cents, 0); assert.equal(r.data.order_status, 'refunded');
+  const after = mocks.state.emails.slice(before);
+  assert.equal(after.filter(m => /^Refund for order/.test(m.subject)).length, 0, 'no second, older-style refund email');
+  assert.equal(after.filter(m => m.subject === 'Your refund from Avanti Print & Design').length, 1);
+  rows = await refundRows(o.order_id); assert.deepEqual(rows.map(x => x.adjustment_number), ['AN-000001', 'AN-000002']);
+  r = await adm('order-refund', { order_id: o.order_id, amount: '1.00', reason: 'Order cancelled' }); assert.equal(r.status, 409); assert.match(r.data.error, /already been refunded in full/);
+  // two staff pressing Refund together on a fresh order: never more than was paid
+  const o2 = await paidStripe(), t2 = (await orderRow(o2.order_id)).total_cents;
+  const both = await Promise.all([1, 2].map(i => adm('order-refund', { order_id: o2.order_id, amount: ((t2 - 100) / 100).toFixed(2), reason: 'Order cancelled', request_key: `race-${i}` })));
+  assert.equal(both.filter(x => x.status === 200).length, 1); assert.equal(both.filter(x => x.status === 409).length, 1);
+  assert.equal((await orderRow(o2.order_id)).refunded_cents, t2 - 100);
+  // the adjustment note and invoice download
+  const u = await adm('invoice-url', { refund_id: rows[0].id }); assert.equal(u.status, 200);
+  const pdf = await fetch(u.data.url); assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+});
+
+test('refunds (Stripe): a refused refund records nothing as refunded; a refund made in Stripe updates the order', async () => {
+  await moneyReset();
+  const o = await paidStripe(), row = await orderRow(o.order_id);
+  mocks.state.stripeRefundFail = { code: 'balance_insufficient', message: 'Insufficient available balance' };
+  let r = await adm('order-refund', { order_id: o.order_id, amount: '5.00', reason: 'Order cancelled' });
+  assert.equal(r.status, 502); assert.match(r.data.error, /enough balance/);
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 0);
+  assert.equal((await refundRows(o.order_id))[0].status, 'failed');
+  mocks.state.stripeRefundFail = null;
+  // made directly in the Stripe dashboard (no metadata of ours)
+  mocks.state.stripeRefunds.push({ id: 're_dash_1', payment_intent: row.provider_ref, amount: 2500, status: 'succeeded', metadata: {} });
+  await postStripe(stripeEvent(o, 'charge.refunded', { object: 'charge', payment_intent: row.provider_ref, amount: row.total_cents, amount_refunded: 2500 }));
+  await postStripe(stripeEvent(o, 'charge.refunded', { object: 'charge', payment_intent: row.provider_ref, amount: row.total_cents, amount_refunded: 2500 }));
+  const rows = (await refundRows(o.order_id)).filter(x => x.status === 'succeeded');
+  assert.equal(rows.length, 1); assert.equal(rows[0].source, 'stripe'); assert.equal(rows[0].reason, 'Refunded in Stripe'); assert.equal(rows[0].adjustment_number, 'AN-000001');
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 2500); assert.equal((await orderRow(o.order_id)).status, 'paid');
+  assert.ok((await events(o.order_id)).some(e => /made directly in Stripe/.test(e.note || '')));
+  // the customer isn't emailed by us for a refund made in Stripe (Stripe tells them)
+  assert.equal(mocks.state.emails.filter(m => /Your refund/.test(m.subject)).length, 0);
+  // a refund Stripe reports as pending counts towards the cap but not the refunded total until it succeeds
+  mocks.state.stripeRefundStatus = 'pending';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '3.00', reason: 'Order cancelled' });
+  assert.equal(r.status, 200); assert.equal(r.data.status, 'pending'); assert.equal((await orderRow(o.order_id)).refunded_cents, 2500);
+  mocks.state.stripeRefunds.at(-1).status = 'succeeded';
+  await postStripe(stripeEvent(o, 'refund.updated', { object: 'refund', payment_intent: row.provider_ref }));
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 2800);
+});
+
+test('refunds (PayPal): capture refund from the dashboard, PayPal notices not counted twice, refunds made in PayPal added', async () => {
+  await moneyReset();
+  const o = await paidPaypal(), row = await orderRow(o.order_id);
+  assert.equal(row.provider_ref, o.capture);
+  let r = await adm('order-refund', { order_id: o.order_id, amount: '20.00', reason: 'Duplicate payment', notify: false });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.status, 'succeeded');
+  const pr = mocks.state.paypalRefunds[0];
+  assert.equal(pr.capture, o.capture); assert.deepEqual(pr.amount, { currency_code: 'AUD', value: '20.00' }); assert.match(pr.requestId, /^refund-/);
+  assert.equal(mocks.state.emails.filter(m => /Your refund/.test(m.subject)).length, 0, 'staff unticked the email');
+  // PayPal's notice for that same refund
+  const ev = id => ({ id, event_type: 'PAYMENT.CAPTURE.REFUNDED', resource: { id: pr.id, status: 'COMPLETED', amount: { value: '20.00' }, links: pr.links } });
+  await postPaypal(ev('WH-R1')); await postPaypal(ev('WH-R2'));
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 2000); assert.equal((await refundRows(o.order_id)).length, 1);
+  // a refund made in PayPal itself
+  await postPaypal({ id: 'WH-R3', event_type: 'PAYMENT.CAPTURE.REFUNDED', resource: { id: 'PPREF-DIRECT', status: 'COMPLETED', amount: { value: '5.50' },
+    links: [{ rel: 'up', href: `https://api.paypal.test/v2/payments/captures/${o.capture}` }] } });
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 2550);
+  assert.equal((await refundRows(o.order_id)).find(x => x.provider_refund_id === 'PPREF-DIRECT').source, 'paypal');
+  // PayPal refuses (time limit): plain words, nothing recorded
+  mocks.state.paypalRefundFail = { issue: 'REFUND_TIME_LIMIT_EXCEEDED', description: 'Refund time limit exceeded' };
+  r = await adm('order-refund', { order_id: o.order_id, amount: '1.00', reason: 'Order cancelled' });
+  assert.equal(r.status, 502); assert.match(r.data.error, /180 days/); assert.equal((await orderRow(o.order_id)).refunded_cents, 2550);
+});
+
+test('refunds (Stripe): no clear answer is never "failed"; Check refund settles it; never paid twice', async () => {
+  await moneyReset();
+  const o = await paidStripe(), total = (await orderRow(o.order_id)).total_cents;
+  // the refund is made at Stripe but the reply is lost
+  mocks.state.stripeRefundLost = 'after';
+  let r = await adm('order-refund', { order_id: o.order_id, amount: '10.00', reason: 'Reprint or fault', notify: true, request_key: 'u1' });
+  assert.equal(r.status, 202, JSON.stringify(r.data)); assert.equal(r.data.status, 'unconfirmed'); assert.match(r.data.message, /don't refund again/);
+  assert.equal(mocks.state.stripeRefunds.length, 1);
+  let rows = await refundRows(o.order_id);
+  assert.equal(rows.length, 1); assert.equal(rows[0].status, 'pending'); assert.equal(rows[0].provider_refund_id, null); assert.equal((await orderRow(o.order_id)).refunded_cents, 0);
+  // a second refund (a new form): the earlier one is looked up at Stripe first (it went through), and staff are
+  // asked to look before refunding again
+  r = await adm('order-refund', { order_id: o.order_id, amount: '10.00', reason: 'Reprint or fault', request_key: 'u2' });
+  assert.equal(r.status, 409); assert.equal(r.data.refund_unconfirmed, true); assert.match(r.data.error, /reload the order/);
+  assert.equal(mocks.state.stripeRefunds.length, 1);
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 1000); assert.equal((await refundRows(o.order_id)).length, 1);
+  let info = await adm('order-money', { order_id: o.order_id });
+  assert.equal(info.data.rows[0].unconfirmed, false); assert.equal(info.data.rows[0].status, 'succeeded'); assert.equal(info.data.rows[0].provider_refund_id, undefined);
+  // Check refund on a settled refund changes nothing; the customer is emailed once
+  r = await adm('refund-check', { refund_id: rows[0].id });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.status, 'succeeded');
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 1000); assert.equal(mocks.state.stripeRefunds.length, 1);
+  assert.equal(mocks.state.emails.filter(m => m.subject === 'Your refund from Avanti Print & Design').length, 1);
+  // the same form sent again after a lost reply: same key, so Stripe returns the first refund (no second one)
+  mocks.state.stripeRefundLost = 'after';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '5.00', reason: 'Order cancelled', request_key: 'u3' }); assert.equal(r.status, 202);
+  r = await adm('order-refund', { order_id: o.order_id, amount: '5.00', reason: 'Order cancelled', request_key: 'u3' });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.status, 'succeeded'); assert.equal(mocks.state.stripeRefunds.length, 2);
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 1500);
+  // the request never reached Stripe: shown as not confirmed, other refunds wait, Check sends it once with the same key
+  mocks.state.stripeRefundLost = 'before';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '2.00', reason: 'Order cancelled', request_key: 'u4' }); assert.equal(r.status, 202);
+  assert.equal(mocks.state.stripeRefunds.length, 2);
+  const id4 = (await refundRows(o.order_id)).find(x => x.request_key === 'u4').id;
+  info = await adm('order-money', { order_id: o.order_id }); assert.equal(info.data.rows.find(x => x.id === id4).unconfirmed, true);
+  r = await adm('order-refund', { order_id: o.order_id, amount: '2.00', reason: 'Order cancelled', request_key: 'u4b' });
+  assert.equal(r.status, 409); assert.equal(r.data.refund_unconfirmed, true); assert.match(r.data.error, /don't refund again/);
+  await assert.rejects(d.rpc('refund_reserve', { p_order: o.order_id, p_amount: 100, p_reason: 'Order cancelled', p_note: null, p_notify: false, p_admin: null, p_admin_email: null, p_key: 'db1' }), /refund_unconfirmed/);
+  r = await adm('refund-check', { refund_id: id4 }); assert.equal(r.data.status, 'succeeded'); assert.equal(mocks.state.stripeRefunds.length, 3);
+  assert.equal((await orderRow(o.order_id)).refunded_cents, 1700);
+  // older than Stripe keeps its keys, and Stripe has no record: failed, nothing counted, refunds allowed again
+  mocks.state.stripeRefundLost = 'before';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '3.00', reason: 'Order cancelled', request_key: 'u5' }); assert.equal(r.status, 202);
+  const id5 = (await refundRows(o.order_id)).find(x => x.request_key === 'u5').id;
+  await d.update('refunds', `id=eq.${id5}`, { created_at: new Date(Date.now() - 25 * 3600000).toISOString() });
+  r = await adm('refund-check', { refund_id: id5 }); assert.equal(r.data.status, 'failed'); assert.match(r.data.message, /no record/);
+  assert.equal(mocks.state.stripeRefunds.length, 3); assert.equal((await orderRow(o.order_id)).refunded_cents, 1700);
+  r = await adm('order-refund', { order_id: o.order_id, amount: '3.00', reason: 'Order cancelled', request_key: 'u6' }); assert.equal(r.status, 200); assert.equal(r.data.refunded_cents, 2000);
+  // the editor role can't check refunds; every attempt is audited, refused ones too
+  assert.equal((await adm('refund-check', { refund_id: id5 }, editorToken)).status, 403);
+  const au = await d.select('audit_log', `select=action,data&action=eq.order.refund&target_id=eq.${o.order_id}`);
+  assert.ok(au.some(a => a.data.status === 'not made'), 'refused attempt audited'); assert.ok(au.some(a => a.data.status === 'unconfirmed'));
+  assert.ok(total > 2000);
+});
+
+test('refunds (Stripe): refunds made in Stripe and old-style refunded orders; a refund that later fails', async () => {
+  await moneyReset();
+  // refunded in full in Stripe: the order moves to Refunded with the usual status email, as before
+  const o = await paidStripe(), row = await orderRow(o.order_id), before = mocks.state.emails.length;
+  mocks.state.stripeRefunds.push({ id: 're_full_1', payment_intent: row.provider_ref, amount: row.total_cents, status: 'succeeded', metadata: {} });
+  await postStripe(stripeEvent(o, 'charge.refunded', { object: 'charge', payment_intent: row.provider_ref, amount: row.total_cents, amount_refunded: row.total_cents, refunded: true }));
+  assert.equal((await orderRow(o.order_id)).status, 'refunded');
+  assert.equal(mocks.state.emails.slice(before).filter(m => /^Refund for order/.test(m.subject)).length, 1);
+  // refunded before refunds were tracked (no rows, and Stripe can't list it): blocked, not refunded twice
+  const o2 = await paidStripe();
+  await d.update('orders', `id=eq.${o2.order_id}`, { status: 'refunded', refunded_at: new Date().toISOString() });
+  let info = await adm('order-money', { order_id: o2.order_id }); assert.match(info.data.block, /before refunds were recorded here/);
+  let r = await adm('order-refund', { order_id: o2.order_id, full: true, reason: 'Order cancelled' });
+  assert.equal(r.status, 409); assert.equal(r.data.refund_blocked, true);
+  const pi2 = (await orderRow(o2.order_id)).provider_ref; assert.equal(mocks.state.stripeRefunds.filter(x => x.payment_intent === pi2).length, 0);
+  // straight at the database too
+  await assert.rejects(d.rpc('refund_reserve', { p_order: o2.order_id, p_amount: 100, p_reason: 'Order cancelled', p_note: null, p_notify: false, p_admin: null, p_admin_email: null, p_key: null }), /legacy_refund/);
+  // a part refund made in Stripe before the switch: brought in when the order is opened, so the totals are right
+  const o3 = await paidStripe(), r3 = await orderRow(o3.order_id);
+  mocks.state.stripeRefunds.push({ id: 're_old_1', payment_intent: r3.provider_ref, amount: 1200, status: 'succeeded', metadata: {} });
+  info = await adm('order-money', { order_id: o3.order_id });
+  assert.equal(info.data.refunded_cents, 1200); assert.equal(info.data.block, null); assert.equal(info.data.left_cents, r3.total_cents - 1200);
+  // a refund Stripe later reports as failed is no longer counted, and staff are told
+  const sr = mocks.state.stripeRefunds.find(x => x.id === 're_old_1'); sr.status = 'failed';
+  await postStripe(stripeEvent(o3, 'refund.updated', { object: 'refund', id: sr.id, payment_intent: r3.provider_ref }));
+  assert.equal((await orderRow(o3.order_id)).refunded_cents, 0);
+  assert.ok((await events(o3.order_id)).some(e => /now says the refund of .* failed/.test(e.note || '')));
+});
+
+test('refunds (PayPal): our refund id goes as custom_id; lost replies are checked with the same request id', async () => {
+  await moneyReset();
+  const o = await paidPaypal();
+  mocks.state.paypalRefundLost = 'after';
+  let r = await adm('order-refund', { order_id: o.order_id, amount: '7.00', reason: 'Reprint or fault', request_key: 'p1' });
+  assert.equal(r.status, 202, JSON.stringify(r.data));
+  const row = (await refundRows(o.order_id))[0], pr = mocks.state.paypalRefunds[0];
+  assert.equal(pr.custom_id, row.id); assert.equal(mocks.state.paypalRefunds.length, 1);
+  // PayPal's notice arrives with our id: it settles our row, no second row
+  await postPaypal({ id: 'WH-P1', event_type: 'PAYMENT.CAPTURE.REFUNDED', resource: { id: pr.id, status: 'COMPLETED', custom_id: row.id, amount: { value: '7.00' }, links: pr.links } });
+  let rows = await refundRows(o.order_id);
+  assert.equal(rows.length, 1); assert.equal(rows[0].status, 'succeeded'); assert.equal((await orderRow(o.order_id)).refunded_cents, 700);
+  // within the window, Check sends the same PayPal-Request-Id: PayPal gives the first answer back
+  mocks.state.paypalRefundLost = 'after';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '3.00', reason: 'Order cancelled', request_key: 'p2' }); assert.equal(r.status, 202);
+  const id2 = (await refundRows(o.order_id)).find(x => x.request_key === 'p2').id;
+  r = await adm('refund-check', { refund_id: id2 }); assert.equal(r.data.status, 'succeeded');
+  assert.equal(mocks.state.paypalRefunds.length, 2); assert.equal((await orderRow(o.order_id)).refunded_cents, 1000);
+  // too old to check automatically: staff check PayPal, then mark it as not refunded
+  mocks.state.paypalRefundLost = 'before';
+  r = await adm('order-refund', { order_id: o.order_id, amount: '1.00', reason: 'Order cancelled', request_key: 'p3' }); assert.equal(r.status, 202);
+  const id3 = (await refundRows(o.order_id)).find(x => x.request_key === 'p3').id;
+  await d.update('refunds', `id=eq.${id3}`, { created_at: new Date(Date.now() - 7 * 3600000).toISOString() });
+  r = await adm('refund-check', { refund_id: id3 }); assert.equal(r.data.manual, true); assert.equal(r.data.status, 'pending');
+  r = await adm('refund-check', { refund_id: id3, not_refunded: true }); assert.equal(r.data.status, 'failed');
+  assert.equal(mocks.state.paypalRefunds.length, 2); assert.equal((await orderRow(o.order_id)).refunded_cents, 1000);
+  // a PayPal payment part refunded the old way (only a note was kept): PayPal says it has a refund, so it's blocked here
+  const o2 = await paidPaypal();
+  mocks.state.paypalCaptureStatus[o2.capture] = 'PARTIALLY_REFUNDED';
+  const info = await adm('order-money', { order_id: o2.order_id }); assert.match(info.data.block, /before refunds were recorded here/);
+  r = await adm('order-refund', { order_id: o2.order_id, full: true, reason: 'Order cancelled' }); assert.equal(r.status, 409); assert.equal(r.data.refund_blocked, true);
+});
+
+test('refunds: an order with no saved payment reference is sent to Stripe or PayPal; a cancelled order stays cancelled when refunded', async () => {
+  await moneyReset();
+  const o = await paidStripe();
+  await d.update('orders', `id=eq.${o.order_id}`, { provider_ref: null });
+  let info = await adm('order-money', { order_id: o.order_id }); assert.match(info.data.block, /refund it in Stripe or PayPal/);
+  let r = await adm('order-refund', { order_id: o.order_id, full: true, reason: 'Order cancelled' });
+  assert.equal(r.status, 409); assert.match(r.data.error, /refund it in Stripe or PayPal/); assert.equal(r.data.refund_blocked, true);
+  // cancel a paid order, then refund it in full: still Cancelled, and shown as refunded
+  const o2 = await paidStripe();
+  assert.equal((await adm('order-transition', { order_id: o2.order_id, to: 'cancelled', notify: false })).status, 200);
+  r = await adm('order-refund', { order_id: o2.order_id, full: true, reason: 'Order cancelled' });
+  assert.equal(r.status, 200); assert.equal(r.data.order_status, 'cancelled'); assert.equal(r.data.left_cents, 0);
+  // an unpaid checkout can't be refunded
+  const o3 = await newOrder('stripe');
+  r = await adm('order-refund', { order_id: o3.order_id, full: true, reason: 'Order cancelled' }); assert.equal(r.status, 409); assert.match(r.data.error, /hasn't been paid/);
+});
+
+test('invoices: generate for an older paid order (dated with its payment), the $1,000 rule', async () => {
+  await moneyReset({ invoices: false });
+  const o = await paidStripe();   // paid while invoices were off
+  await d.update('orders', `id=eq.${o.order_id}`, { paid_at: '2026-10-02T03:00:00Z' });
+  process.env.INVOICES_ENABLED = 'true';
+  await adm('business-save', { legal_name: 'Example Signs Pty Ltd', abn: VALID_ABN });
+  const g = await adm('invoice-generate', { order_id: o.order_id });
+  assert.equal(g.status, 200); assert.equal(g.data.number, 'AV-000001');
+  const row = await orderRow(o.order_id);
+  assert.equal(new Date(row.invoice_issued_at).toISOString(), '2026-10-02T03:00:00.000Z');
+  assert.equal(row.invoice_sent_at, null, 'generating does not email it');
+  assert.equal((await adm('invoice-generate', { order_id: o.order_id })).data.number, 'AV-000001', 'same number the second time');
+  // a sale of $1,000 or more: the buyer is named on the invoice (their name if no business name)
+  const big = await paidStripe({ lines: [{ ...LINE_BANNER, qty: 10 }] });
+  const brow = await orderRow(big.order_id); assert.ok(brow.total_cents >= 100000, `total ${brow.total_cents}`);
+  const att = mocks.state.emails.filter(m => /tax invoice/i.test(m.subject)).at(-1).attachments[0];
+  const { execFileSync } = await import('node:child_process'); const fs = await import('node:fs');
+  const f = `/tmp/inv-big-${process.pid}.pdf`; fs.writeFileSync(f, Buffer.from(att.content, 'base64'));
+  try { const t = execFileSync('pdftotext', [f, '-'], { encoding: 'utf8' }); assert.match(t, /BILL TO\s+Jo Buyer/); assert.match(t, /Tax invoice/); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  fs.unlinkSync(f);
+});
+
+test('invoices: test payments (Stripe test keys, PayPal sandbox, test gateway, Vercel previews) never use a real number', async () => {
+  await moneyReset({ live: false });
+  const o = await paidStripe(); let row = await orderRow(o.order_id);
+  assert.equal(row.invoice_number, 'TEST-AV-000001');
+  const r = await adm('order-refund', { order_id: o.order_id, amount: '2.00', reason: 'Order cancelled' }); assert.equal(r.status, 200);
+  assert.equal((await refundRows(o.order_id))[0].adjustment_number, 'TEST-AN-000001');
+  // a preview deployment, even with live-style keys
+  liveMode(); process.env.VERCEL_ENV = 'preview';
+  const p = await paidStripe(); assert.equal((await orderRow(p.order_id)).invoice_number, 'TEST-AV-000002');
+  delete process.env.VERCEL_ENV;
+  // real money: the real series starts at AV-000001, untouched by the tests above
+  const real = await paidStripe(); assert.equal((await orderRow(real.order_id)).invoice_number, 'AV-000001');
+  const att = mocks.state.emails.filter(m => /tax invoice/i.test(m.subject)).find(m => m.attachments && m.attachments[0].filename.includes('TEST-AV-000001'));
+  const { execFileSync } = await import('node:child_process'); const fs = await import('node:fs');
+  const f = `/tmp/inv-test-${process.pid}.pdf`; fs.writeFileSync(f, Buffer.from(att.attachments[0].content, 'base64'));
+  try { assert.match(execFileSync('pdftotext', [f, '-'], { encoding: 'utf8' }), /TEST ONLY/); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  fs.unlinkSync(f);
+  testMode(); delete process.env.REFUNDS_ENABLED; delete process.env.INVOICES_ENABLED;
+});

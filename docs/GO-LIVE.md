@@ -39,6 +39,8 @@ This file is the technical checklist.
 | `CRON_SECRET` | any long random string; Vercel sends it to the scheduled job |
 | `PAYMENTS_SIMULATOR` | `true` on staging only, for test orders with no keys. Never on live. |
 | `DISCOUNTS_ENABLED` | `true` turns on discount codes at checkout (run the discount codes SQL first). Default off. |
+| `REFUNDS_ENABLED` | `true` turns on refunds from the dashboard order page (run the refunds and invoices SQL first). Default off. |
+| `INVOICES_ENABLED` | `true` turns on tax invoices emailed after payment, adjustment notes and Business details. Default off. |
 
 ## 3. Webhooks to register
 

@@ -32,7 +32,7 @@ export async function sendEmail(d, msg, cfg = config()) {
 function payload(msg, cfg) {
   return { from: msg.from || (msg.kind === 'transactional' ? cfg.email.from : cfg.email.marketingFrom), to: [msg.to], bcc: msg.bcc ? [msg.bcc] : undefined,
     reply_to: msg.replyTo || cfg.email.replyTo, subject: msg.subject,
-    attachments: msg.attachments && msg.attachments.length ? msg.attachments.map(a => ({ filename: a.filename, path: a.path })) : undefined, html: msg.html, text: msg.text, headers: msg.headers || undefined,
+    attachments: msg.attachments && msg.attachments.length ? msg.attachments.map(a => a.path ? { filename: a.filename, path: a.path } : { filename: a.filename, content: a.content }) : undefined, html: msg.html, text: msg.text, headers: msg.headers || undefined,
     tags: msg.campaign_id ? [{ name: 'campaign', value: msg.campaign_id.replace(/[^\w-]/g, '') }] : undefined };
 }
 
@@ -187,6 +187,30 @@ export function orderEmail(kind, o, cfg = config()) {
   }[kind];
   if (!T) return null;
   return { subject: T.subject, html: layout({ preheader: T.pre, body: T.body, cfg }), text: T.text + `\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}` };
+}
+
+// Tax invoice, emailed once an order is paid (the PDF is attached; the link always fetches a fresh copy).
+export function invoiceEmail(o, biz, link, cfg = config()) {
+  const name = biz.trading_name || biz.legal_name || cfg.business.name;
+  const subject = `Your tax invoice from ${cfg.business.name} (order ${o.number})`;
+  const body = h1('Your tax invoice') + p(`Hi ${e(first(o.name))},`) +
+    p(`Thanks for your order with ${e(name)}. Your tax invoice <b>${e(o.invoice_number)}</b> for order <b>${e(o.number)}</b> is attached as a PDF.`) +
+    p(`Total paid: <b>${money(o.total_cents)}</b> (includes GST of ${money(Math.round(o.total_cents / 11))}).`) +
+    btn('Download your tax invoice', link) + p(`<span style="color:${MUTED};font-size:13px">Need a copy sent to your accounts team? Just reply to this email and we'll send it on.</span>`) + help(cfg);
+  const text = `Hi ${first(o.name)},\n\nThanks for your order with ${name}. Your tax invoice ${o.invoice_number} for order ${o.number} is attached as a PDF.\n\nTotal paid: ${money(o.total_cents)} (includes GST of ${money(Math.round(o.total_cents / 11))}).\n\nDownload it any time: ${link}\n\n${helpText(cfg)}`;
+  return { subject, html: layout({ preheader: `Tax invoice ${o.invoice_number} for order ${o.number}`, body, cfg }), text: text + `\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}` };
+}
+
+// A refund made from the dashboard (the adjustment note is attached when the order has a tax invoice).
+export function refundEmail(o, refund, cfg = config(), { method = '', attached = false } = {}) {
+  const full = (o.refunded_cents || 0) >= o.total_cents;
+  const subject = `Your refund from ${cfg.business.name}`;
+  const body = h1('Your refund is on its way') + p(`Hi ${e(first(o.name))},`) +
+    p(`We've refunded <b>${money(refund.amount_cents)}</b> for order <b>${e(o.number)}</b>${method ? ` to your ${e(method)}` : ' to your original payment method'}.${full ? '' : ` That's ${money(o.refunded_cents || refund.amount_cents)} refunded of the ${money(o.total_cents)} you paid.`}`) +
+    p('Refunds usually take 5 to 10 business days to appear, depending on your bank.') +
+    (attached ? p(`An adjustment note (${e(refund.adjustment_number)}) for your records is attached.`) : '') + help(cfg);
+  const text = `Hi ${first(o.name)},\n\nWe've refunded ${money(refund.amount_cents)} for order ${o.number}${method ? ` to your ${method}` : ' to your original payment method'}.${full ? '' : ` That's ${money(o.refunded_cents || refund.amount_cents)} refunded of the ${money(o.total_cents)} you paid.`}\n\nRefunds usually take 5 to 10 business days to appear, depending on your bank.${attached ? `\n\nAn adjustment note (${refund.adjustment_number}) for your records is attached.` : ''}\n\n${helpText(cfg)}`;
+  return { subject, html: layout({ preheader: `${money(refund.amount_cents)} refunded for order ${o.number}`, body, cfg }), text: text + `\n\n${cfg.business.name}\n${cfg.business.phone} · ${cfg.business.email}` };
 }
 
 // Emails for the Avanti team: "New order" (kind 'new', with everything needed to start the job)

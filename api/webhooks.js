@@ -6,6 +6,7 @@ import { stripeVerify, paypalVerify, paypalCapture } from './_lib/payments.js';
 import { svixVerify } from './_lib/email.js';
 import { markPaid, move } from './_lib/effects.js';
 import { suppress, unsubscribe } from './_lib/marketing.js';
+import { refundsReady, stripeRefundEvent, paypalRefundEvent } from './_lib/refunds.js';
 
 async function claim(d, provider, id, type, payload) {
   const rows = await d.insert('webhook_events', { provider, event_id: id, type, payload }, { onConflict: 'provider,event_id', ignore: true });
@@ -32,6 +33,13 @@ async function stripeEvent(d, ev, actor, cfg) {
     }
     if (ev.type === 'checkout.session.async_payment_failed') { if (o.status === 'pending_payment') await move(d, o.id, 'cancelled', actor, 'Payment failed', {}, cfg); return 'processed'; }
     if (ev.type === 'checkout.session.expired') { await note(d, o, actor, 'Checkout expired without payment.'); return 'processed'; }
+  }
+  // Refunds switched on: every refund on the payment is recorded once (made in the dashboard or in Stripe)
+  if ((ev.type === 'charge.refunded' || ev.type === 'refund.created' || ev.type === 'refund.updated') && await refundsReady(d, cfg)) {
+    const o = obj.payment_intent ? await orderBy(d, 'provider_ref', obj.payment_intent) : null;
+    if (!o) return 'ignored';
+    await stripeRefundEvent(d, o, obj.payment_intent, cfg);
+    return 'processed';
   }
   if (ev.type === 'charge.refunded') {
     const o = await orderBy(d, 'provider_ref', obj.payment_intent);
@@ -64,9 +72,11 @@ async function paypalEvent(d, ev, cfg) {
     return o ? 'processed' : 'ignored';
   }
   if (ev.event_type === 'PAYMENT.CAPTURE.REFUNDED' || ev.event_type === 'PAYMENT.CAPTURE.REVERSED') {
-    const up = (r.links || []).find(l => l.rel === 'up'), capId = r.custom_id ? null : up && up.href.split('/').pop();
-    const o = r.custom_id ? await orderBy(d, 'id', r.custom_id) : await orderBy(d, 'provider_ref', capId);
+    const up = (r.links || []).find(l => l.rel === 'up'), capId = up && up.href.split('/').pop();
+    const o = (r.custom_id && UUID_RE.test(r.custom_id) ? await orderBy(d, 'id', r.custom_id) : null) || await orderBy(d, 'provider_ref', capId);
     if (!o) return 'ignored';
+    // Refunds switched on: recorded once (made in the dashboard or in PayPal)
+    if (ev.event_type === 'PAYMENT.CAPTURE.REFUNDED' && await refundsReady(d, cfg)) { await paypalRefundEvent(d, o, r, cfg); return 'processed'; }
     const amt = Math.round(Number(r.amount && r.amount.value) * 100);
     if (ev.event_type === 'PAYMENT.CAPTURE.REFUNDED' && amt >= o.total_cents) { if (o.status !== 'refunded') await move(d, o.id, 'refunded', actor, 'Refunded in PayPal', {}, cfg); }
     else await note(d, o, actor, ev.event_type === 'PAYMENT.CAPTURE.REVERSED' ? 'PayPal payment reversed (chargeback). Check the PayPal dashboard.' : `Partial refund of $${(amt / 100).toFixed(2)} made in PayPal.`);

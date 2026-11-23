@@ -1,6 +1,14 @@
 # Avanti Print & Design, new storefront (v1)
 
-Version 2026.11.20. Release notes: `CHANGELOG.md`.
+Version 2026.11.23. Release notes: `CHANGELOG.md`.
+
+## Email (SMTP2GO)
+
+All site emails (order confirmations and updates, new-order alerts to Avanti, tax invoices, refunds,
+campaigns) go through SMTP2GO when `SMTP2GO_API_KEY` is set in Vercel (Production; redeploy after
+changing it). The domain avantiprint.com.au must be a verified sender in SMTP2GO. Without a key,
+emails are only recorded in Dashboard > Email log as "Logged only". Resend still works with
+`RESEND_API_KEY`; SMTP2GO is used when both are set.
 
 ## Refunds and tax invoices (November 2026)
 

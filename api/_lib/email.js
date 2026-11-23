@@ -1,10 +1,10 @@
-// Email: sending (Resend), the email log, and branded templates with plain-text versions.
+// Email: sending (SMTP2GO or Resend), the email log, and branded templates with plain-text versions.
 import crypto from 'node:crypto';
 import { config, escHtml as e, money, HttpError } from './core.js';
 
 // ---------- sending ----------
-// Every message is written to email_log first, then sent. Without RESEND_API_KEY the log row is
-// marked 'logged' and nothing leaves the building (useful for staging and tests).
+// Every message is written to email_log first, then sent. Without SMTP2GO_API_KEY (or RESEND_API_KEY) the
+// log row is marked 'logged' and nothing leaves the building (useful for staging and tests).
 // EMAIL_TEST_RECIPIENT: send everything to one test address instead, and say who it was really for.
 const redirect = (msg, cfg) => cfg.email.testRecipient
   ? { ...msg, to: cfg.email.testRecipient, bcc: undefined, subject: `[TEST for ${msg.to}] ${msg.subject}` } : msg;
@@ -15,8 +15,13 @@ export async function sendEmail(d, msg, cfg = config()) {
     kind: msg.kind, template: msg.template || null, to_email: msg.to, subject: msg.subject,
     order_id: msg.order_id || null, campaign_id: msg.campaign_id || null, automation_key: msg.automation_key || null,
     customer_id: msg.customer_id || null, provider: cfg.email.mode, status: 'queued' });
-  if (cfg.email.mode !== 'resend') { await d.update('email_log', `id=eq.${log.id}`, { status: 'logged' }); return { ...log, status: 'logged' }; }
+  if (!cfg.email.sending) { await d.update('email_log', `id=eq.${log.id}`, { status: 'logged' }); return { ...log, status: 'logged' }; }
   try {
+    if (cfg.email.mode === 'smtp2go') {
+      const id = await smtp2goSend(msg, cfg, msg.attachments ? 20000 : 10000);
+      await d.update('email_log', `id=eq.${log.id}`, { status: 'sent', provider_id: id });
+      return { ...log, status: 'sent', provider_id: id };
+    }
     const r = await fetch(`${cfg.email.apiBase}/emails`, { method: 'POST',
       headers: { Authorization: `Bearer ${cfg.email.resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': log.id },
       body: JSON.stringify(payload(msg, cfg)), signal: AbortSignal.timeout(msg.attachments ? 12000 : 10000) });   // a hung email service never holds up an order
@@ -36,7 +41,32 @@ function payload(msg, cfg) {
     tags: msg.campaign_id ? [{ name: 'campaign', value: msg.campaign_id.replace(/[^\w-]/g, '') }] : undefined };
 }
 
-// Campaigns go out in batches of up to 100 (one API call each), all logged individually.
+// SMTP2GO: POST /v3/email/send with the X-Smtp2go-Api-Key header. It can answer 200 with a failure inside,
+// so data.failed / data.error are checked too. Attachments go as base64 (fileblob) or as a link it fetches (url).
+const MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml',
+  tif: 'image/tiff', tiff: 'image/tiff', ai: 'application/postscript', eps: 'application/postscript', psd: 'image/vnd.adobe.photoshop', zip: 'application/zip' };
+const mimeOf = name => MIME[String(name || '').split('.').pop().toLowerCase()] || 'application/octet-stream';
+export function smtp2goPayload(msg, cfg) {
+  const p = payload(msg, cfg), headers = [];
+  if (p.reply_to) headers.push({ header: 'Reply-To', value: p.reply_to });
+  for (const [header, value] of Object.entries(p.headers || {})) if (!/^reply-to$/i.test(header)) headers.push({ header, value: String(value) });
+  return { sender: p.from, to: p.to, bcc: p.bcc, subject: p.subject, html_body: p.html, text_body: p.text,
+    custom_headers: headers.length ? headers : undefined,
+    attachments: p.attachments && p.attachments.map(a => a.path ? { filename: a.filename, url: a.path, mimetype: mimeOf(a.filename) }
+      : { filename: a.filename, fileblob: a.content, mimetype: mimeOf(a.filename) }) };
+}
+async function smtp2goSend(msg, cfg, timeout = 10000) {   // a hung email service never holds up an order
+  const r = await fetch(`${cfg.email.smtp2goBase}/email/send`, { method: 'POST', signal: AbortSignal.timeout(timeout),
+    headers: { 'X-Smtp2go-Api-Key': cfg.email.smtp2goKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(smtp2goPayload(msg, cfg)) });
+  const j = await r.json().catch(() => ({})), data = j.data || {};
+  const why = data.error || (data.failures && data.failures.length && String(data.failures[0])) || '';
+  if (!r.ok || why || !(data.succeeded > 0)) throw new Error(`SMTP2GO: ${why || `error ${r.status}`}`);
+  return data.email_id || null;
+}
+
+// Campaigns go out in batches of up to 100 (one API call each with Resend; one email per call, a few at a
+// time, with SMTP2GO), all logged individually.
 export async function sendBatch(d, msgs, cfg = config()) {
   msgs = msgs.map(m => redirect(m, cfg));
   const results = [];
@@ -45,9 +75,25 @@ export async function sendBatch(d, msgs, cfg = config()) {
     const logs = await d.insert('email_log', chunk.map(m => ({ kind: m.kind, template: m.template || null, to_email: m.to, subject: m.subject,
       campaign_id: m.campaign_id || null, automation_key: m.automation_key || null, customer_id: m.customer_id || null,
       provider: cfg.email.mode, status: 'queued' })));
-    if (cfg.email.mode !== 'resend') {
+    if (!cfg.email.sending) {
       await d.update('email_log', `id=in.(${logs.map(l => l.id).join(',')})`, { status: 'logged' });
       results.push(...logs.map(l => ({ ...l, status: 'logged' }))); continue;
+    }
+    if (cfg.email.mode === 'smtp2go') {
+      for (let k = 0; k < chunk.length; k += 5) {   // five at a time: well inside SMTP2GO's rate limits
+        await Promise.all(chunk.slice(k, k + 5).map(async (m, j) => {
+          const l = logs[k + j];
+          try {
+            const id = await smtp2goSend(m, cfg);
+            await d.update('email_log', `id=eq.${l.id}`, { status: 'sent', provider_id: id });
+            results.push({ ...l, status: 'sent', provider_id: id });
+          } catch (err) {
+            await d.update('email_log', `id=eq.${l.id}`, { status: 'failed', error: String(err.message).slice(0, 500) });
+            results.push({ ...l, status: 'failed' });
+          }
+        }));
+      }
+      continue;
     }
     try {
       const r = await fetch(`${cfg.email.apiBase}/emails/batch`, { method: 'POST',

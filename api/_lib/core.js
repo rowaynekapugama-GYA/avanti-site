@@ -31,12 +31,16 @@ export function config() {
     simulator: E('PAYMENTS_SIMULATOR') === 'true',
     simulatorSecret: E('SIMULATOR_WEBHOOK_SECRET', 'whsec_simulator_only_not_for_production'),
     email: {
+      // SMTP2GO (what GYA's other sites use) is used when its key is set; Resend is still supported.
+      smtp2goKey: E('SMTP2GO_API_KEY').trim(), smtp2goBase: E('SMTP2GO_API_BASE', 'https://api.smtp2go.com/v3'),
       resendKey: E('RESEND_API_KEY'), apiBase: E('RESEND_API_BASE', 'https://api.resend.com'),
       webhookSecret: E('RESEND_WEBHOOK_SECRET'),
       from: E('EMAIL_FROM', 'Avanti Print & Design <no-reply@avantiprint.com.au>'),
       marketingFrom: E('EMAIL_MARKETING_FROM', E('EMAIL_FROM', 'Avanti Print & Design <no-reply@avantiprint.com.au>')),
       replyTo: E('EMAIL_REPLY_TO', 'info@avantiprint.com.au'),
-      get mode() { return this.resendKey ? 'resend' : 'log'; },   // without a key, emails are logged, not sent
+      // without a key, emails are logged, not sent
+      get mode() { return this.smtp2goKey ? 'smtp2go' : this.resendKey ? 'resend' : 'log'; },
+      get sending() { return this.mode !== 'log'; },
       // Order emails (confirmation, status updates, staff alert). 'false' switches them all off; staff can
       // also switch them off instantly in the dashboard (Email log > Order emails), with no redeploy.
       ordersEnabled: E('ORDER_EMAILS_ENABLED', 'true').trim().toLowerCase() !== 'false',

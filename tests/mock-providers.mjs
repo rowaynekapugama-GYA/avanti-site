@@ -85,6 +85,11 @@ export function startMocks(port = 0) {
       const b = JSON.parse(raw);
       return send(200, { verification_status: b.transmission_sig === 'valid-signature' ? state.verify : 'FAILURE' });
     }
+    // ---- SMTP2GO ----
+    if (p === '/v3/email/send' && req.method === 'POST') { const b = JSON.parse(raw);
+      if (req.headers['x-smtp2go-api-key'] !== 'api-test-key') return send(401, { data: { error_code: 'E_ApiResponseCodes.API_KEY_INVALID', error: 'Invalid API key' } });
+      if (state.smtp2goFail) return send(200, { data: { succeeded: 0, failed: 1, failures: [state.smtp2goFail] } });   // 200 with a failure inside
+      const id = `s2g_${++n}`; (state.smtp2go = state.smtp2go || []).push({ id, ...b }); return send(200, { request_id: 'r', data: { succeeded: 1, failed: 0, failures: [], email_id: id } }); }
     // ---- Resend ----
     if (p === '/emails' && req.method === 'POST') { const b = JSON.parse(raw), id = `re_${++n}`;
       if (state.failAttachments && b.attachments) return send(422, { message: 'Attachment too large' });   // to test the links-only fallback

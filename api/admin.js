@@ -221,7 +221,7 @@ async function adminAction(req, cfg, admin) {
       }
       let sw = null; try { sw = await d.one('app_flags', 'select=value&key=eq.order_emails'); } catch (e) { /* not set up yet: on */ }
       const copies = await flag(d, 'order_email_copies');
-      return json({ sending: cfg.email.mode === 'resend', order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false), copies,
+      return json({ sending: cfg.email.sending, email_provider: cfg.email.mode, order_emails_env: cfg.email.ordersEnabled, order_emails_switch: !(sw && sw.value === false), copies,
         test_recipient: cfg.email.testRecipient || null, staff_email: cfg.email.adminList.join(', ') || null, timezone: cfg.timezone });
     }
     // ---------------- shipping calculator ----------------

@@ -31,8 +31,8 @@ This file is the technical checklist.
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | from the PayPal app |
 | `PAYPAL_WEBHOOK_ID` | from the PayPal webhook below |
 | `PAYPAL_ENV` | `sandbox` while testing, `live` at launch |
-| `RESEND_API_KEY` | from Resend (without it, emails are logged in the dashboard but not sent) |
-| `RESEND_WEBHOOK_SECRET` | `whsec_...` from the Resend webhook |
+| `SMTP2GO_API_KEY` | from SMTP2GO (Settings > API Keys, permission to send email). Without it (or a Resend key), emails are logged in the dashboard but not sent |
+| `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | only if Resend is used instead of SMTP2GO |
 | `EMAIL_FROM` | `Avanti Print & Design <no-reply@avantiprint.com.au>` (default) |
 | `EMAIL_REPLY_TO` | `info@avantiprint.com.au` (default) |
 | `BUSINESS_ABN`, `BUSINESS_ADDRESS` | shown in every marketing email (Spam Act) |
@@ -71,11 +71,14 @@ cancelling checkouts left unpaid for 14 days. Vercel's free plan allows daily on
 the schedule to `*/15 * * * *` so scheduled campaigns and abandoned-cart emails go out within 15
 minutes. The "Run now" button in Automations does the same on demand.
 
-## 6. Email (Resend)
+## 6. Email (SMTP2GO)
 
-Create a Resend account, add the domain `avantiprint.com.au`, and add the DNS records it shows
-(SPF, DKIM, and a DMARC record if there isn't one). Until the domain is verified, keep
-`RESEND_API_KEY` empty: emails are then recorded in the Email log but not sent.
+In SMTP2GO, add `avantiprint.com.au` under Sending > Verified Senders and add the DNS records it
+shows in SiteGround (Site Tools > Domain > DNS Zone Editor). Leave the Google MX records alone: the
+mailboxes are on Google. Once verified, create an API key with permission to send email and set
+`SMTP2GO_API_KEY` in Vercel (Production), then redeploy. Until then emails are recorded in the Email
+log as "Logged only" but not sent. (Resend still works instead, with `RESEND_API_KEY`; SMTP2GO is used
+when both are set.)
 
 ## 7. Testing before launch
 

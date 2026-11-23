@@ -1,5 +1,19 @@
 # Changelog
 
+## 23 November 2026: Emails sent through SMTP2GO (version 2026.11.23)
+
+No email service was ever connected on the live site, so since launch every email (order
+confirmations, status updates, new-order alerts to Avanti, tax invoices) was recorded in the Email
+log as "Logged only" and not delivered.
+
+- The site can now send through SMTP2GO, the service GYA uses on its other sites. Set
+  `SMTP2GO_API_KEY` in Vercel (Production) and redeploy; nothing else changes. Resend still works
+  if its key is set instead; SMTP2GO is used when both are set.
+- Attachments (tax invoices, adjustment notes, artwork) are sent the same way as before.
+- Emails already marked "Logged only" are not sent afterwards. Use Resend invoice or Resend email
+  on an order to send one again.
+- Not yet: SMTP2GO's delivered, opened and clicked notices. The Email log shows "Sent" for each email.
+
 ## 20 November 2026: Refunds and tax invoices (version 2026.11.20)
 
 How-to for the Avanti team: `docs/HOW-TO-REFUNDS-AND-INVOICES.md`.

@@ -4221,7 +4221,7 @@ const GYA = (() => {
           : 'Switched off in Vercel (ORDER_EMAILS_ENABLED=false). Change it there to turn order emails back on.'}</p>
         ${st.staff_email && on ? `<div class="gya-row" style="margin-top:10px;justify-content:space-between"><span class="gya-small">${st.copies ? `<b>Copies on:</b> ${esc(st.staff_email)} also gets a copy of every email sent to a customer (confirmation, status updates, cancellations, refunds, notes), marked [Copy].` : `<b>Copies off:</b> ${esc(st.staff_email)} only gets new-order and payment-failed alerts.`}</span>
           <button class="gya-btn gya-btn-line gya-btn-sm" id="lfCopies">${st.copies ? 'Turn copies off' : 'Turn copies on'}</button></div>` : ''}
-        ${!st.sending ? '<p class="gya-warn" style="margin:10px 0 0">The email service (Resend) is not connected yet, so emails are recorded below as “Logged only” but not delivered.</p>' : ''}
+        ${!st.sending ? '<p class="gya-warn" style="margin:10px 0 0">The email service (SMTP2GO) is not connected yet, so emails are recorded below as “Logged only” but not delivered.</p>' : ''}
         ${st.test_recipient ? `<p class="gya-warn" style="margin:10px 0 0">Test mode: every email goes to <b>${esc(st.test_recipient)}</b> only (EMAIL_TEST_RECIPIENT).</p>` : ''}</section>`;
       const cp = qs('#lfCopies', box);
       if (cp) cp.onclick = () => busy(cp, async () => { if (await settings({ order_email_copies: !st.copies }) !== false) toast(st.copies ? 'Copies turned off' : 'Copies turned on'); });

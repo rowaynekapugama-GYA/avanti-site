@@ -5,6 +5,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { startMocks } from './mock-providers.mjs';
 import { SEED } from '../api/_lib/shipping/seed.js';
 
@@ -26,7 +28,7 @@ const cron = await import('../api/cron.js');
 const { stripeSign } = await import('../api/_lib/payments.js');
 const { svixSign } = await import('../api/_lib/email.js');
 const { db, config } = await import('../api/_lib/core.js');
-const { loadCatalogue, unitCents } = await import('../api/_lib/orders.js');
+const { loadCatalogue, unitCents, loadOrder: loadOrderForTest } = await import('../api/_lib/orders.js');
 const mk = await import('../api/_lib/marketing.js');
 const d = db();
 
@@ -1642,4 +1644,139 @@ test('invoices: test payments (Stripe test keys, PayPal sandbox, test gateway, V
   try { assert.match(execFileSync('pdftotext', [f, '-'], { encoding: 'utf8' }), /TEST ONLY/); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   fs.unlinkSync(f);
   testMode(); delete process.env.REFUNDS_ENABLED; delete process.env.INVOICES_ENABLED;
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Eyelets dropdown on corflute (EYELETS_ENABLED)
+const EY_ROW = (label, position, extra = {}) => ({ label, position, price_rule: 'none', amount: 0, count_mode: 'fixed', fixed_count: null, spacing_mm: null, active: true, is_default: false, ...extra });
+const EY_SEED = [EY_ROW('No eyelets', 0, { is_default: true }), EY_ROW('Eyelets - corners', 1), EY_ROW('Eyelets - centre-top', 2)];
+const EY_PRICED = [EY_ROW('No eyelets', 0, { is_default: true }), EY_ROW('Corners', 1, { price_rule: 'per_sign', amount: 2.5, fixed_count: 4 }),
+  EY_ROW('Every 500mm', 2, { price_rule: 'per_eyelet', amount: 0.5, count_mode: 'around', spacing_mm: 500 }),
+  EY_ROW('Old choice', 3, { price_rule: 'per_sign', amount: 1, active: false })];
+async function eyReset(on, rows = EY_SEED) {
+  await reset();
+  if (on) process.env.EYELETS_ENABLED = 'true'; else delete process.env.EYELETS_ENABLED;
+  await d.remove('eyelet_choices', 'id=not.is.null'); await d.insert('eyelet_choices', rows);
+  await d.update('products', 'slug=in.(corflute-signs,corflute-signs-custom-dimensions)', { eyelets: true });
+}
+const CF_STD = (Eyelets, qty = 1, extra = {}) => ({ slug: 'corflute-signs', qty, opts: { Material: 'Corflute Signs 3mm', Size: '600mm x 400mm', Printing: 'Single Side', ...(Eyelets ? { Eyelets } : {}) }, ...extra });
+const CF_CUSTOM = (Eyelets, qty = 1, size = '1000 × 500 mm') => ({ slug: 'corflute-signs-custom-dimensions', qty, opts: { Material: 'Corflute Signs 5mm', Printing: 'Single Side', 'Custom size': size, ...(Eyelets ? { Eyelets } : {}) } });
+const eyQuote = (lines, extra = {}) => call(checkout.POST, '/api/checkout?action=quote', { method: 'POST', body: { lines, postcode: '2164', ...extra } });
+const psqlRun = sql => execFileSync('psql', ['-h', '/tmp', '-U', 'postgres', '-d', process.env.TEST_PGDATABASE || 'cms', '-qc', sql]);
+
+test('eyelets: switched off, or the database update not run, nothing changes', async () => {
+  await eyReset(false);
+  let cfgR = await call(checkout.GET, '/api/checkout?action=config'); assert.equal(cfgR.data.eyelets, undefined);
+  let q = await eyQuote([CF_STD(null, 2), CF_CUSTOM('Eyelets - corners')]);
+  assert.equal(q.status, 200, JSON.stringify(q.data));
+  assert.deepEqual(q.data.lines.map(l => l.unit_cents), [768, 1600]);     // today's prices (5mm custom 1000 x 500 at $32/m2)
+  // switched on, but the table and column aren't there yet
+  process.env.EYELETS_ENABLED = 'true';
+  psqlRun('alter table public.eyelet_choices rename to eyelet_choices_hidden; alter table public.products rename column eyelets to eyelets_hidden;');
+  try {
+    cfgR = await call(checkout.GET, '/api/checkout?action=config'); assert.equal(cfgR.status, 200); assert.equal(cfgR.data.eyelets, undefined);
+    q = await eyQuote([CF_STD(null, 2), CF_CUSTOM('Eyelets - corners')]);
+    assert.equal(q.status, 200, JSON.stringify(q.data)); assert.deepEqual(q.data.lines.map(l => l.unit_cents), [768, 1600]);
+    const o = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'simulator', customer: CUSTOMER, lines: [CF_CUSTOM('Eyelets - corners')] } });
+    assert.equal(o.status, 201, JSON.stringify(o.data));
+    const it = (await d.select('order_items', `select=options&order_id=eq.${o.data.order_id}`))[0];
+    assert.equal(it.options.Eyelets, 'Eyelets - corners');
+  } finally {
+    psqlRun('alter table public.eyelet_choices_hidden rename to eyelet_choices; alter table public.products rename column eyelets_hidden to eyelets;');
+  }
+  delete process.env.EYELETS_ENABLED;
+});
+
+test('eyelets: switched on with the existing choices, every price is exactly today\'s', async () => {
+  await eyReset(true);
+  const cfgR = await call(checkout.GET, '/api/checkout?action=config');
+  assert.deepEqual(cfgR.data.eyelets.choices.map(c => [c.label, c.rule, c.amount_cents, c.default]),
+    [['No eyelets', 'none', 0, true], ['Eyelets - corners', 'none', 0, false], ['Eyelets - centre-top', 'none', 0, false]]);
+  assert.match(cfgR.data.eyelets.help, /hang it/);
+  const q = await eyQuote([CF_STD('No eyelets'), CF_STD(null, 3), CF_CUSTOM('Eyelets - corners'), CF_CUSTOM('Eyelets - centre-top', 2)]);
+  assert.equal(q.status, 200, JSON.stringify(q.data));
+  assert.deepEqual(q.data.lines.map(l => l.unit_cents), [768, 768, 1600, 1600]);
+  // and every other product's price is unchanged (the full before and after list is compared separately)
+  const cat = await loadCatalogue(d, ['pull-up-banner', 'foamboard', 'corflute-insertable-a-frame']);
+  assert.equal(unitCents(cat.products['pull-up-banner'], 5, {}), 10800);
+});
+
+test('eyelets: a charge per sign or per eyelet, worked out on the server from the size, with GST, and sent to Stripe and PayPal', async () => {
+  await eyReset(true, EY_PRICED);
+  process.env.DISCOUNTS_ENABLED = 'false';
+  const lines = [CF_STD('No eyelets'), CF_STD('Corners', 3), CF_CUSTOM('Every 500mm', 2)];
+  const q = await eyQuote(lines);
+  assert.equal(q.status, 200, JSON.stringify(q.data));
+  assert.deepEqual(q.data.lines.map(l => [l.unit_cents, l.line_cents]), [[768, 768], [1018, 3054], [1900, 3800]]);   // 1600 + 6 x $0.50
+  assert.equal(q.data.subtotal_cents, 768 + 3054 + 3800);
+  // GST: one eleventh of everything charged, the eyelets included (delivery's GST is the same with or without them)
+  const { gstIn } = await import('../api/_lib/discounts.js');
+  const plain = await eyQuote([CF_STD('No eyelets'), CF_STD('No eyelets', 3), CF_CUSTOM('No eyelets', 2)]);
+  assert.equal(q.data.delivery_cents, plain.data.delivery_cents);
+  assert.equal(q.data.gst_cents - plain.data.gst_cents, gstIn(7622) - gstIn(768 * 4 + 3200));
+  assert.equal(q.data.total_cents, 7622 + q.data.delivery_cents);
+  const ship = { inc_gst_cents: q.data.delivery_cents };
+  // a made-up price, count or wording from the browser makes no difference
+  const fake = await eyQuote([{ ...CF_CUSTOM('Every 500mm', 2), unit_price: 0.01, price: 0.01, unit_cents: 1, eyelets_count: 1, eyelets_cents: 1 }]);
+  assert.deepEqual(fake.data.lines.map(l => l.unit_cents), [1900]);
+  for (const bad of ['Every 500mm (1 eyelets, +$0.01 per sign)', 'Old choice', 'Every 50mm']) {
+    const r = await eyQuote([CF_CUSTOM(bad)]); assert.equal(r.status, 400, bad); assert.match(r.data.error, /no longer available/);
+  }
+  // Stripe: the card page charges the server's total, with eyelets inside each sign's price
+  const o = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER, lines } });
+  assert.equal(o.status, 201, JSON.stringify(o.data));
+  const order = await d.one('orders', `select=*&id=eq.${o.data.order_id}`);
+  assert.equal(order.total_cents, 7622 + ship.inc_gst_cents);
+  const sp = mocks.state.stripeSessions.at(-1).params;
+  let sum = 0; for (let i = 0; sp[`line_items[${i}][quantity]`]; i++) sum += +sp[`line_items[${i}][quantity]`] * +sp[`line_items[${i}][price_data][unit_amount]`];
+  assert.equal(sum, order.total_cents);
+  assert.equal(sp['line_items[1][price_data][unit_amount]'], '1018');
+  assert.match(sp['line_items[2][price_data][product_data][description]'], /Every 500mm \(6 eyelets, \+\$3\.00 per sign\)/);
+  const items = await d.select('order_items', `select=options,unit_cents,line_cents,eyelets_label,eyelets_count,eyelets_cents&order_id=eq.${o.data.order_id}&order=position`);
+  assert.deepEqual(items.map(i => [i.eyelets_label, i.eyelets_count, i.eyelets_cents]), [['No eyelets', null, 0], ['Corners', 4, 750], ['Every 500mm', 6, 600]]);
+  assert.equal(items[0].options.Eyelets, 'No eyelets');   // no "$0.00" anywhere
+  // PayPal: the items add up to the item total PayPal is told
+  const pp = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'paypal', customer: CUSTOMER, lines } });
+  assert.equal(pp.status, 201, JSON.stringify(pp.data));
+  const pu = Object.values(mocks.state.paypalOrders).at(-1).body.purchase_units[0];
+  const itemSum = pu.items.reduce((t, i) => t + Math.round(+i.unit_amount.value * 100) * +i.quantity, 0);
+  assert.equal(itemSum, Math.round(+pu.amount.breakdown.item_total.value * 100)); assert.equal(itemSum, 7622);
+});
+
+test('eyelets: a product discount code comes off the eyelets charge too, as it does the rest of the sign', async () => {
+  await eyReset(true, EY_PRICED);
+  await d.remove('discount_codes', 'id=not.is.null'); process.env.DISCOUNTS_ENABLED = 'true';
+  await mkCode({ code: 'EYE10', applies_to: 'products', kind: 'percent', percent: '10' });
+  const q = await eyQuote([CF_CUSTOM('Every 500mm', 2)], { discount_code: 'EYE10' });
+  assert.equal(q.status, 200, JSON.stringify(q.data));
+  assert.equal(q.data.product_discount_cents, 380);   // 10% of $38.00, eyelets included
+  process.env.DISCOUNTS_ENABLED = 'false';
+});
+
+test('eyelets: orders placed before the change still show the same way in the dashboard, emails and tax invoice', async () => {
+  await eyReset(false);
+  const before = await call(checkout.POST, '/api/checkout?action=create', { method: 'POST', body: { provider: 'stripe', customer: CUSTOMER, lines: [CF_CUSTOM('Eyelets - corners')] } });
+  assert.equal(before.status, 201, JSON.stringify(before.data));
+  const bo = { ...before.data, row: await d.one('orders', `select=*&id=eq.${before.data.order_id}`) };
+  assert.equal((await postStripe(stripeEvent(bo))).status, 200);
+  process.env.EYELETS_ENABLED = 'true'; process.env.INVOICES_ENABLED = 'true';
+  await d.remove('business_details', 'id=gte.0');
+  await act(adminToken, 'business-save', { legal_name: 'Example Signs Pty Ltd', trading_name: 'Avanti Print & Design', abn: '51824753556', phone: '(02) 9729 0139', email: 'info@avantiprint.com.au' });
+  const item = (await d.select('order_items', `select=*&order_id=eq.${before.data.order_id}`))[0];
+  assert.equal(item.options.Eyelets, 'Eyelets - corners'); assert.equal(item.eyelets_label, null);
+  // the confirmation email (sent while switched off) and the dashboard's order data
+  assert.ok(mocks.state.emails.some(m => /Eyelets - corners/.test(m.html || '')));
+  const st = await call(checkout.GET, `/api/checkout?action=status&id=${before.data.order_id}&t=${bo.row.public_token}`);
+  assert.equal(st.data.items[0].options.Eyelets, 'Eyelets - corners');
+  // a tax invoice made now still prints it
+  const g = await act(adminToken, 'invoice-generate', { order_id: before.data.order_id });
+  assert.equal(g.status, 200, JSON.stringify(g.data));
+  const { invoicePdf } = await import('../api/_lib/invoices.js');
+  const o = await loadOrderForTest(d, before.data.order_id);
+  const pdf = await invoicePdf(d, o, config());
+  const f = `/tmp/ey-inv-${process.pid}.pdf`; fs.writeFileSync(f, pdf);
+  try { assert.match(execFileSync('pdftotext', ['-layout', f, '-'], { encoding: 'utf8' }), /Eyelets - corners/); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  fs.unlinkSync(f);
+  delete process.env.INVOICES_ENABLED; delete process.env.EYELETS_ENABLED;
+  await eyReset(false);
 });

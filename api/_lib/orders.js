@@ -6,15 +6,17 @@ import { UNAVAILABLE, METHOD, serialiseQuote } from './shipping/engine.js';
 import { STATE_RANGES } from './shipping/validate.js';
 import { normaliseCode, CODE_RE, MESSAGES as DISCOUNT_MESSAGES, checkCode, discountAmounts, discountsReady, findCode, usesByEmail, gstIn } from './discounts.js';
 import { invoicesReady, abnDigits } from './invoices.js';
+import { eyeletsReady, loadChoices, priceEyelets } from './eyelets.js';
 
 const STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 // ---- catalogue ----
-export async function loadCatalogue(d, slugs) {
+// eyelets: true only once the eyelets update is switched on and its database column exists.
+export async function loadCatalogue(d, slugs, { eyelets = false } = {}) {
   const list = [...new Set(slugs)].map(s => `"${String(s).replace(/"/g, '')}"`).join(',');
   const [products, variations, tiers, cats, classes, rates, options] = await Promise.all([
-    d.select('products', `select=slug,name,category_slug,pricing_mode,base_price,wall_dims,dims_config,variation_keys,sold_out,published&slug=in.(${list})`),
+    d.select('products', `select=slug,name,category_slug,pricing_mode,base_price,wall_dims,dims_config,variation_keys,sold_out,published${eyelets ? ',eyelets' : ''}&slug=in.(${list})`),
     d.select('product_variations', `select=product_slug,option_values,price,available&product_slug=in.(${list})`),
     d.select('product_price_tiers', `select=product_slug,min_qty,unit_price&product_slug=in.(${list})&order=min_qty`),
     d.select('categories', 'select=slug,name,shipping_class'),
@@ -128,7 +130,9 @@ export function validateCustomer(c = {}) {
 export async function quote(d, body) {
   const raw = Array.isArray(body.lines) ? body.lines.slice(0, 100) : [];
   if (!raw.length) throw new HttpError(400, 'Your cart is empty.');
-  const cat = await loadCatalogue(d, raw.map(l => l.slug));
+  // Eyelets (when switched on): priced here from the eyelets list and the sign's size, added to the price of each sign.
+  const eyOn = await eyeletsReady(d, config()), eyChoices = eyOn ? await loadChoices(d) : [];
+  const cat = await loadCatalogue(d, raw.map(l => l.slug), { eyelets: eyOn });
   const lines = raw.map((l, i) => {
     const p = cat.products[l.slug];
     if (!p || !p.published) throw new HttpError(400, 'An item in your cart is no longer available. Please remove it and try again.');
@@ -137,7 +141,9 @@ export async function quote(d, body) {
     if (!(qty >= 1 && qty <= 100000)) throw new HttpError(400, `Please check the quantity for ${p.name}.`);
     const opts = Object.fromEntries(Object.entries(l.opts || {}).slice(0, 40).map(([k, v]) => [String(k).slice(0, 80), String(v).slice(0, 500)]));
     checkCustomSize(p, opts);
-    const unit = unitCents(p, qty, opts);
+    let unit = unitCents(p, qty, opts);
+    const ey = eyOn ? priceEyelets(p, opts, eyChoices) : null;
+    if (ey) { unit += ey.each_cents; opts.Eyelets = ey.text; }
     const art = l.art || null;
     const artwork = art ? {
       later: !!art.later, design: art.design ? String(art.design).slice(0, 200) : null,
@@ -147,7 +153,8 @@ export async function quote(d, body) {
         copy: !!f.copy || f.name === 'Same as front' })),   // "copy": one artwork printed on both sides, nothing to upload
     } : null;
     return { position: i, product_slug: p.slug, name: p.name, category_slug: p.category_slug, options: opts, qty,
-      unit_cents: unit, line_cents: unit * qty, artwork, ship_opts: shippingOptions(p, opts) };
+      unit_cents: unit, line_cents: unit * qty, artwork, ship_opts: shippingOptions(p, opts),
+      ...(ey ? { eyelets_label: ey.label, eyelets_count: ey.count, eyelets_cents: ey.each_cents * qty } : {}) };
   });
   // Delivery: one "Standard Delivery" price from the shipping calculator, for the customer's postcode.
   // Product prices include GST; the delivery price is worked out ex GST and GST is added to it.

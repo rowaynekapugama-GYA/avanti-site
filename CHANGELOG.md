@@ -1,5 +1,20 @@
 # Changelog
 
+## 26 November 2026: Eyelets dropdown on corflute (version 2026.11.26)
+
+- An **Eyelets** dropdown on standard size and custom size corflute, as Joey asked on 26 November.
+  The choices and prices are set in Dashboard > Commerce > Eyelets: no extra charge, an amount per sign,
+  or an amount per eyelet with the number set, or worked out from the sign's size (around the edge or
+  along the top, no more than a set spacing apart). Customers see the count and the cost before adding
+  to cart; the server works it out again at checkout and charges its own figure.
+- The existing custom size choices (No eyelets, Eyelets - corners, Eyelets - centre-top) move into the
+  new list at no extra charge, with No eyelets as the default. No price changes when it's switched on.
+- Product editor: "Show the Eyelets dropdown on this product" tick box.
+- Order lines keep the choice, the number of eyelets and the charge (`order_items.eyelets_*`).
+- Behind `EYELETS_ENABLED` (default off). Off, or before the SQL has run, the site is exactly as before.
+- Checked: every product's price through the full checkout quote, before and after, with the switch off
+  and on (1,092 priced lines, no differences).
+
 ## 23 November 2026: Emails sent through SMTP2GO (version 2026.11.23)
 
 No email service was ever connected on the live site, so since launch every email (order

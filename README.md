@@ -1,6 +1,32 @@
 # Avanti Print & Design, new storefront (v1)
 
-Version 2026.11.23. Release notes: `CHANGELOG.md`.
+Version 2026.11.26. Release notes: `CHANGELOG.md`.
+
+## Eyelets on corflute (November 2026)
+
+An **Eyelets** dropdown on Corflute Signs (standard sizes) and Corflute Signs - Custom Dimensions. The
+choices and their prices are set in **Dashboard > Commerce > Eyelets** (admins only) and are the same on
+every product that shows the dropdown. Guide for the Avanti team: `docs/HOW-TO-EYELETS.md`.
+
+- **Setting:** `EYELETS_ENABLED=true` (Vercel, Production and Preview; a change needs a redeploy). Off by
+  default, and off while the database update hasn't run. Off, the site is exactly as before: custom size
+  corflute keeps its plain Eyelets option and standard sizes have none.
+- **Database:** `supabase/migrations/20261126120000_eyelets_option.sql` (additive, safe to run twice).
+
+| Table / column | What it holds |
+| --- | --- |
+| `eyelet_choices` | The dropdown: label, price rule (`none`, `per_sign`, `per_eyelet`), amount (GST incl.), count rule (`fixed` count, or `around` / `top` with a spacing in mm), order, shown, default. Admin read and write only; checkout reads it with the server key |
+| `products.eyelets` | Tick box in the product editor: show the dropdown on this product |
+| `order_items.eyelets_label`, `eyelets_count`, `eyelets_cents` | What was chosen, how many eyelets per sign, and the eyelets charge for the whole line |
+
+- **Pricing:** the server works out the count from the sign's size (standard size or custom width and
+  height, turned by portrait or landscape) and adds the eyelets charge to the price of each sign. The
+  browser's price and count are never used. Stripe, PayPal, the tax invoice, discount codes and refunds
+  all see it as part of the sign's price, so GST and discounts apply to it like the rest of the sign.
+- **On the order:** the line's Eyelets option reads, for example, "Every 500mm around the edge (6 eyelets,
+  +$3.00 per sign)". A choice with no charge shows just its label; no "$0.00" anywhere.
+- **Seeded with** the three choices custom size corflute already offered (No eyelets, Eyelets - corners,
+  Eyelets - centre-top), all at no extra charge, so switching on changes no price.
 
 ## Email (SMTP2GO)
 

@@ -7,6 +7,7 @@ import { customerView } from './_lib/shipping/engine.js';
 import { receive } from './webhooks.js';
 import { discountsReady } from './_lib/discounts.js';
 import { invoicesReady, signedFile } from './_lib/invoices.js';
+import { eyeletsReady, loadChoices, publicChoices, HELP as EYELET_HELP } from './_lib/eyelets.js';
 
 const UPLOAD_OK = ['paid', 'in_production'];   // artwork can be added online until the order is dispatched
 
@@ -26,7 +27,11 @@ export const GET = handle(async (req) => {
     if (connected) { try { discounts = await discountsReady(db(cfg), cfg); } catch (e) { discounts = false; } }
     // tax invoices on: checkout asks business buyers for their business name and ABN (both optional)
     if (connected) { try { invoices = await invoicesReady(db(cfg), cfg); } catch (e) { invoices = false; } }
-    return json({ providers: connected ? providers(cfg) : [], currency: 'AUD', discounts, ...(invoices ? { invoices: true } : {}) });
+    // eyelets on: the dropdown's choices, for products ticked to show it (prices are worked out again at checkout)
+    let eyelets = null;
+    if (connected) { try { const d = db(cfg); if (await eyeletsReady(d, cfg)) eyelets = { help: EYELET_HELP, choices: publicChoices(await loadChoices(d)) }; } catch (e) { eyelets = null; } }
+    return json({ providers: connected ? providers(cfg) : [], currency: 'AUD', discounts, ...(invoices ? { invoices: true } : {}),
+      ...(eyelets && eyelets.choices.length ? { eyelets } : {}) });
   }
 
   if (action === 'status') {

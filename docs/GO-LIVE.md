@@ -41,6 +41,7 @@ This file is the technical checklist.
 | `DISCOUNTS_ENABLED` | `true` turns on discount codes at checkout (run the discount codes SQL first). Default off. |
 | `REFUNDS_ENABLED` | `true` turns on refunds from the dashboard order page (run the refunds and invoices SQL first). Default off. |
 | `INVOICES_ENABLED` | `true` turns on tax invoices emailed after payment, adjustment notes and Business details. Default off. |
+| `EYELETS_ENABLED` | `true` turns on the Eyelets dropdown on corflute (choices and prices in Dashboard > Commerce > Eyelets). Default off. |
 
 ## 3. Webhooks to register
 

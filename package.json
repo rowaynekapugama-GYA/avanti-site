@@ -1,6 +1,6 @@
 {
   "name": "avanti-site",
-  "version": "2026.11.23",
+  "version": "2026.11.26",
   "private": true,
   "type": "module",
   "description": "Avanti Print & Design storefront: static site plus serverless API for checkout, orders and email.",
@@ -8,6 +8,6 @@
   "scripts": {
     "dev": "node scripts/dev-server.mjs",
     "test": "node --test tests/api.test.mjs",
-    "test:maths": "node --test tests/email.test.mjs tests/discounts.test.mjs tests/invoices.test.mjs tests/pricing.test.mjs tests/shipping.test.mjs"
+    "test:maths": "node --test tests/eyelets.test.mjs tests/email.test.mjs tests/discounts.test.mjs tests/invoices.test.mjs tests/pricing.test.mjs tests/shipping.test.mjs"
   }
 }

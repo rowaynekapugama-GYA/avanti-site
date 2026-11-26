@@ -69,6 +69,9 @@ export function config() {
     // and stays off while its database tables don't exist yet, so the live site works exactly as before.
     refunds: { enabled: E('REFUNDS_ENABLED', 'false').trim().toLowerCase() === 'true' },
     invoices: { enabled: E('INVOICES_ENABLED', 'false').trim().toLowerCase() === 'true' },
+    // Eyelets dropdown on corflute (standard and custom sizes). Off unless EYELETS_ENABLED=true, and off while
+    // its database table doesn't exist yet: the site then works exactly as before.
+    eyelets: { enabled: E('EYELETS_ENABLED', 'false').trim().toLowerCase() === 'true' },
     vercelEnv: E('VERCEL_ENV'),
     cronSecret: E('CRON_SECRET'),
   };

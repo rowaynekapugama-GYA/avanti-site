@@ -984,6 +984,9 @@ p{margin:0 0 1em}
 .opt{margin-bottom:16px}
 .opt label{display:block;font-size:.8rem;font-weight:700;margin-bottom:6px}
 .opt label span{font-family:var(--mono);color:var(--ink-3);font-weight:400;font-size:.7rem;margin-left:6px}
+.opt .opt-help{margin:6px 0 0;font-size:.78rem;line-height:1.45;color:var(--ink-3)}
+.opt .opt-help-strong{color:var(--ink);font-weight:600}
+.opt .opt-help:empty{display:none}
 .opt select{width:100%;padding:12px 40px 12px 14px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2317161A' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 14px center;appearance:none}
 .opt select:focus{border-color:var(--ink);outline:none}
 .tiers{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:0 0 20px;font-family:var(--mono);font-size:.76rem}
@@ -1593,8 +1596,8 @@ const PRODUCTS = [
   {s:'metal-face-a-frame', n:'Metal Face A-Frame', c:'a-frames', p:200, pmax:400, img:IMGS_AFRAME, opts:{'Size':['600mmW x 900mmH','900mmW x 1200mmH'],'Laminate':['Gloss','Matte']}, d:SIGN('Premium, permanent-style signage','A heavy-duty A-frame with a solid metal face. Includes high-resolution print and your choice of laminate for extra durability and finish.'), long:`<p>Double-sided print included as standard, with your choice of gloss or matte laminate.</p><h4>Specs</h4><ul><li>Sizes: 600 × 900mm (9kg) or 900 × 1200mm (18kg)</li><li>Double-sided print included</li><li>Choice of gloss or matte laminate</li><li>Solid, wind-resistant construction</li></ul><h4>Ideal for</h4><ul><li>Permanent branding</li><li>Cafes, shops, medical practices</li><li>Outdoor advertising in high-traffic areas</li></ul>`},
   {s:'acm-panels', n:'ACM Panels', c:'acm-panels', p:25.20, pmax:453.60, img:IMGS_ACM, opts:{'Material':['Aluminium Composite Panel with polymeric print and gloss/matte laminate'],'Size':['600mm x 400mm','600mm x 600mm','600mm x 800mm','800mm x 1200mm','1200mm x 1200mm','1200mm x 2400mm'],'Printing':['Single Side','Double Side'],'Laminate':['Matte','Gloss']}, d:SIGN('Strong, weatherproof, long-lasting signage','Aluminium Composite Material panels give a sleek, rigid and highly durable signage solution, ideal for shopfronts, building fascia, directional signage, directories and outdoor branding.')},
   {s:'acm-panels-custom-dimensions', n:'ACM Panels - Custom Dimensions', c:'acm-panels', p:160, img:[IMGS_ACM[1],IMGS_ACM[3]], opts:{'Printing':['Single Side','Double Side'],'Laminate':['Matte','Gloss']}, cdims:{maxW:1200,maxH:2400}, d:SIGN('Strong, weatherproof, long-lasting signage','Need a size that isn\'t standard? Order ACM at your own dimensions. Enter your width and height and we\'ll cut to size.'), tags:['custom']},
-  {s:'corflute-signs', n:'Corflute Signs', c:'corflute', p:7.68, pmax:155.52, img:IMGS_CORFLUTE, opts:{'Material':['Corflute Signs 3mm','Corflute Signs 5mm'],'Size':['600mm x 400mm','600mm x 600mm','600mm x 800mm','800mm x 1200mm','1200mm x 1200mm','1200mm x 2400mm'],'Printing':['Single Side','Double Side']}, d:SIGN('Lightweight, affordable, weather-resistant','The go-to solution for short to medium-term signage. Durable, versatile and cost-effective, perfect for events, construction sites, real estate and promotional campaigns.')},
-  {s:'corflute-signs-custom-dimensions', n:'Corflute Signs - Custom Dimensions', c:'corflute', p:32, img:[IMGS_CORFLUTE[1],IMGS_CORFLUTE[3]], opts:{'Material':['Corflute Signs 3mm','Corflute Signs 5mm'],'Printing':['Single Side','Double Side'],'Eyelets':['No eyelets','Eyelets - corners','Eyelets - centre-top']}, cdims:{maxW:1200,maxH:2400}, d:SIGN('Lightweight, affordable, weather-resistant','Corflute cut to your exact dimensions, any size up to 1200 × 2400 mm, with contour cutting to custom shapes available.'), long:`<p>Printed direct to 3mm or 5mm corflute with high-resolution latex inks, vibrant colour, fully waterproof and outdoor-durable. Single or double sided, with optional eyelets in the corners or centre-top for hanging and mounting.</p><h4>Good to know</h4><ul><li>3mm suits indoor or short-term outdoor use; 5mm is more rigid for windy or longer-term outdoor jobs</li><li>Any size up to 1200 × 2400 mm; contour cutting to custom shapes on request</li><li>Typical turnaround 2–4 business days from artwork approval, rush available</li></ul>`, tags:['custom']},
+  {s:'corflute-signs', n:'Corflute Signs', c:'corflute', p:7.68, pmax:155.52, ey:1, img:IMGS_CORFLUTE, opts:{'Material':['Corflute Signs 3mm','Corflute Signs 5mm'],'Size':['600mm x 400mm','600mm x 600mm','600mm x 800mm','800mm x 1200mm','1200mm x 1200mm','1200mm x 2400mm'],'Printing':['Single Side','Double Side']}, d:SIGN('Lightweight, affordable, weather-resistant','The go-to solution for short to medium-term signage. Durable, versatile and cost-effective, perfect for events, construction sites, real estate and promotional campaigns.')},
+  {s:'corflute-signs-custom-dimensions', n:'Corflute Signs - Custom Dimensions', c:'corflute', p:32, ey:1, img:[IMGS_CORFLUTE[1],IMGS_CORFLUTE[3]], opts:{'Material':['Corflute Signs 3mm','Corflute Signs 5mm'],'Printing':['Single Side','Double Side'],'Eyelets':['No eyelets','Eyelets - corners','Eyelets - centre-top']}, cdims:{maxW:1200,maxH:2400}, d:SIGN('Lightweight, affordable, weather-resistant','Corflute cut to your exact dimensions, any size up to 1200 × 2400 mm, with contour cutting to custom shapes available.'), long:`<p>Printed direct to 3mm or 5mm corflute with high-resolution latex inks, vibrant colour, fully waterproof and outdoor-durable. Single or double sided, with optional eyelets in the corners or centre-top for hanging and mounting.</p><h4>Good to know</h4><ul><li>3mm suits indoor or short-term outdoor use; 5mm is more rigid for windy or longer-term outdoor jobs</li><li>Any size up to 1200 × 2400 mm; contour cutting to custom shapes on request</li><li>Typical turnaround 2–4 business days from artwork approval, rush available</li></ul>`, tags:['custom']},
   {s:'enviroboard', n:'EnviroBoard', c:'enviroboard', p:12.00, pmax:233.28, img:IMGS_ENVIRO, opts:{'Material':['Enviro Board Kraft 10mm','Enviro Board Kraft 20mm','Enviro Board White 10mm','Enviro Board White 20mm'],'Size':['600mm x 400mm','600mm x 600mm','600mm x 800mm','800mm x 1200mm','1200mm x 1200mm','1200mm x 2400mm'],'Printing':['Single Side','Double Side']}, d:SIGN('Eco-friendly, lightweight, fully recyclable','A sustainable alternative to foamboard or PVC signage. Made from environmentally conscious materials, ideal for brands prioritising eco-responsibility.')},
   {s:'floor-decals', n:'Floor Decals', c:'floor-decals', p:3.60, pmax:40, img:IMGS_FLOOR, opts:{'Material':['Floor decals with anti slip lam'],'Size':['300mm x 300mm','400mm x 400mm','600mm x 600mm','800mm x 800mm','1000mm x 1000mm']}, d:SIGN('Durable anti-slip graphics for indoor and outdoor floors','Turn foot traffic into brand engagement, direct customers, promote sales or reinforce safety. Printed on tough, anti-slip materials designed for high-traffic conditions.')},
   {s:'floor-decals-custom', n:'Floor Decals - Custom Dimensions', c:'floor-decals', p:160, img:[IMGS_FLOOR[1],IMGS_FLOOR[3]], opts:{'Material':['Floor decals with anti slip lam']}, cdims:{}, d:SIGN('Durable anti-slip graphics for indoor and outdoor floors','Custom-sized floor graphics for wayfinding, promotions and safety zones.'), tags:['custom']},
@@ -2515,7 +2518,7 @@ const GYA = (() => {
       if (/sign in again/i.test(e.message)) { clearSession(); location.hash = '#/login?next=' + encodeURIComponent(location.hash); } }
   }
   // sidebar grouped like an operator portal; sections can set their own group
-  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', discounts: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce', business: 'Commerce',
+  const NAV_GROUPS = { overview: 'Overview', analytics: 'Overview', orders: 'Commerce', discounts: 'Commerce', products: 'Commerce', categories: 'Commerce', shipping: 'Commerce', business: 'Commerce', eyelets: 'Commerce',
     customers: 'Customers', campaigns: 'Marketing', segments: 'Marketing', automations: 'Marketing', emaillog: 'Marketing',
     blog: 'Content', pages: 'Content', content: 'Content', seo: 'Content', media: 'Content', settings: 'Account' };
   function navHtml(current) {
@@ -2845,7 +2848,9 @@ const GYA = (() => {
         <h4 class="gya-sub">Bulk pricing</h4><p class="gya-muted">Optional. Price each drops once the order reaches the quantity.</p>
         <div class="gya-list" id="gyaTiers">${tiers.map(tierItem).join('')}</div><button type="button" class="gya-btn gya-btn-line gya-btn-sm" id="gyaAddTier">Add price break</button>`)}
       ${ui.card('Options', `<p class="gya-muted">Choices the customer makes, like size or finish.</p><div class="gya-list" id="gyaOpts">${options.map(optItem).join('')}</div>
-        <button type="button" class="gya-btn gya-btn-line gya-btn-sm" id="gyaAddOpt">Add option</button>`)}
+        <button type="button" class="gya-btn gya-btn-line gya-btn-sm" id="gyaAddOpt">Add option</button>
+        ${!isNew && p && 'eyelets' in p ? `<div class="gya-checks" style="margin-top:14px">${ui.check('eyelets', p.eyelets, 'Show the Eyelets dropdown on this product')}</div>
+        <small class="gya-muted">The choices and their prices are the same on every product that shows it. Set them in <a href="#/admin/eyelets">Commerce &gt; Eyelets</a>. While the dropdown is switched on, an option called Eyelets above is replaced by it.</small>` : ''}`)}
       <section class="gya-card" id="gyaGridCard" hidden><h3>Price grid</h3>
         <p class="gya-muted">A price for every combination of the options that change the price. Untick <b>Sold</b> for combinations you don't offer.</p>
         <div class="gya-row gya-grid-tools">
@@ -2971,6 +2976,8 @@ const GYA = (() => {
       if (payload.templates.some(t => !t.label)) throw new Error('Every template needs a label.');
       if (isNew || newSlug !== p.slug) { const clash = await rest(`products?select=slug&slug=eq.${enc(newSlug)}`); if (clash.length) throw new Error('Another product already uses that web address.'); }
       await rpc('admin_save_product', { p: payload });
+      if (f.eyelets && (f.eyelets.checked !== !!p.eyelets || newSlug !== p.slug)) await rest(`products?slug=eq.${enc(newSlug)}`, { method: 'PATCH', body: { eyelets: f.eyelets.checked }, prefer: 'return=minimal' });
+      if (f.eyelets) p.eyelets = f.eyelets.checked;
       await saveSeo('/product/' + newSlug, f);
       if (!isNew && newSlug !== p.slug) await del('seo_entries', `route=eq.${enc('/product/' + p.slug)}`);
       markClean(); invalidate(); await refreshPublic(); toast('Product saved');
@@ -3026,7 +3033,7 @@ const GYA = (() => {
    ============================================================================ */
 (function (G) {
   'use strict';
-  const { esc, qs, qsa, ui, head, toast, rest, rpc, busy, server } = G;
+  const { esc, qs, qsa, ui, head, toast, rest, rpc, busy, server, sortable } = G;
   const enc = encodeURIComponent;
   const $c = c => '$' + ((c || 0) / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dt = s => s ? new Date(s).toLocaleDateString('en-AU') : '';
@@ -3369,6 +3376,98 @@ const GYA = (() => {
     const rm = qs('#bizLogoRm', main); if (rm) rm.onclick = () => busy(rm, async () => { await server('business-logo', { remove: true }); toast('Logo removed'); businessPage(main); });
   }
   G.section({ id: 'business', label: 'Business details', order: 31.5, render: main => businessPage(main) });
+
+  // ---------- Eyelets: the dropdown on corflute (standard and custom sizes) ----------
+  // Saved straight to the eyelet_choices table (admins only). The shop server prices every order again from
+  // this list and the sign's size; the storefront only shows the customer what the server will charge.
+  const EY_RULES = [['none', 'No extra charge'], ['per_sign', 'Amount per sign'], ['per_eyelet', 'Amount per eyelet']];
+  const EY_MODES = [['fixed', 'Set number'], ['around', 'Around the edge'], ['top', 'Along the top']];
+  const eyCountAdm = (c, w, h) => c.count_mode === 'fixed' ? (c.fixed_count || 0) : !(c.spacing_mm > 0) ? null
+    : c.count_mode === 'top' ? Math.max(1, Math.ceil(w / c.spacing_mm)) + 1 : 2 * (Math.max(1, Math.ceil(w / c.spacing_mm)) + Math.max(1, Math.ceil(h / c.spacing_mm)));
+  async function eyeletsPage(main) {
+    const top = head('Eyelets', 'The Eyelets dropdown on corflute signs, standard and custom sizes. Prices include GST.');
+    if (window.GYA_DEMO) { main.innerHTML = top + '<p class="gya-note">Eyelets are priced on the shop server, so they are not part of this demo.</p>'; return; }
+    let rows, prods = [], on = null;
+    try { rows = await rest('eyelet_choices?select=*&order=position,label'); }
+    catch (e) { main.innerHTML = top + `<p class="gya-warn">${/eyelet_choices|schema cache|does not exist/i.test(e.message) ? 'The database update for eyelets hasn\'t been run yet. Run the eyelets SQL file in Supabase (see docs/HOW-TO-EYELETS.md), then reload this page.' : esc(e.message)}</p>`; return; }
+    try { prods = await rest('products?select=slug,name&eyelets=is.true&order=name'); } catch (e) { prods = []; }
+    try { const r = await fetch(`${(window.GYA_CMS_CONFIG && window.GYA_CMS_CONFIG.apiBase) || '/api'}/checkout?action=config`); const c = await r.json(); on = !!(c && c.eyelets); } catch (e) { on = null; }
+    const item = (c = { label: '', price_rule: 'none', amount: 0, count_mode: 'fixed', active: true }) => `<div class="gya-item" data-sort-item data-ey="${esc(c.id || '')}">${ui.grip}
+      <div class="gya-item-body">
+        <div class="gya-grid2">${ui.field('Label customers see', ui.text('label', c.label, 'maxlength="80" placeholder="e.g. Every 500mm around the edge"'))}
+          <div class="gya-checks">${ui.check('active', c.active !== false, 'Shown to customers')}
+            <label class="gya-check"><input type="radio" name="eydefault" value="1" ${c.is_default ? 'checked' : ''}><span>Default choice</span></label></div></div>
+        <div class="gya-grid2">${ui.field('Price', ui.select('price_rule', EY_RULES, c.price_rule))}${ui.field('Amount ($, GST included)', ui.num('amount', c.amount == null ? 0 : c.amount))}</div>
+        <div class="gya-grid2" data-eycount>${ui.field('Number of eyelets', ui.select('count_mode', EY_MODES, c.count_mode || 'fixed'), 'Set number: the same on every sign. Around the edge or along the top: worked out from the size.')}
+          <div>${ui.field('Eyelets per sign', `<input class="gya-in" type="number" min="1" max="200" step="1" name="fixed_count" value="${esc(c.fixed_count || '')}">`, '', 'ey-fixed')}
+            ${ui.field('No more than this far apart (mm)', `<input class="gya-in" type="number" min="50" max="5000" step="10" name="spacing_mm" value="${esc(c.spacing_mm || '')}">`, '', 'ey-space')}</div></div>
+        <p class="gya-muted gya-small" data-eyex></p>
+      </div>
+      <div class="gya-item-side">${ui.moveBtns}<button type="button" class="gya-x" data-remove>Remove</button></div></div>`;
+    main.innerHTML = top + `
+      ${on === false ? '<p class="gya-warn">The Eyelets dropdown is switched off on this site (EYELETS_ENABLED isn\'t true in Vercel). You can set up the choices now; customers see them once it\'s switched on.</p>' : on ? '<p class="gya-note">The Eyelets dropdown is on. Changes show on the site as soon as you save.</p>' : ''}
+      <div class="gya-grid2 gya-biz"><div>
+        <section class="gya-card"><h3>Choices</h3><p class="gya-muted">In the order customers see them. The default is selected when the page opens; keep it as "No eyelets" so nobody pays for eyelets by accident.</p>
+          <div class="gya-list" id="eyList">${rows.map(item).join('')}</div>
+          <div class="gya-row"><button type="button" class="gya-btn gya-btn-line gya-btn-sm" id="eyAdd">Add choice</button><button type="button" class="gya-btn gya-btn-red" id="eySave">Save choices</button></div></section>
+      </div><div>
+        <section class="gya-card"><h3>Shown on</h3>${prods.length ? `<ul class="gya-mini">${prods.map(x => `<li><a href="#/admin/products/${esc(x.slug)}">${esc(x.name)}</a></li>`).join('')}</ul>` : '<p class="gya-muted">No products yet.</p>'}
+          <p class="gya-muted gya-small">To add or remove a product, open it in Products and use the "Show the Eyelets dropdown" tick box.</p></section>
+        <section class="gya-card"><h3>How eyelets are priced</h3><ul class="gya-mini gya-dc-help">
+          <li><b>No extra charge</b>: nothing is added.</li>
+          <li><b>Amount per sign</b>: the amount is added to the price of each sign.</li>
+          <li><b>Amount per eyelet</b>: the amount times the number of eyelets on each sign. Use a set number (for example 4 for corners), or a spacing and the website works the number out from the sign's size.</li>
+          <li>Spaced around the edge: one in each corner, then no more than the spacing apart along every edge. A 600 × 400 sign at 500mm gets 6.</li>
+          <li>Discount codes come off the eyelets too, like the rest of the sign's price.</li>
+          <li>To stop offering a choice, untick "Shown to customers". Old orders keep showing what was chosen.</li></ul></section>
+      </div></div>`;
+    const list = qs('#eyList', main);
+    const sync = it => { const g = n => qs(`[name=${n}]`, it); const rule = g('price_rule').value, mode = g('count_mode').value;
+      const show = (el, on) => { el.style.display = on ? '' : 'none'; };   // (hidden= loses to the grid and field styles)
+      show(qs('[data-eycount]', it), rule === 'per_eyelet'); g('amount').disabled = rule === 'none';
+      show(qs('.ey-fixed', it), mode === 'fixed'); show(qs('.ey-space', it), mode !== 'fixed');
+      const c = { count_mode: mode, fixed_count: +g('fixed_count').value || 0, spacing_mm: +g('spacing_mm').value || 0 }, amt = Math.round((+g('amount').value || 0) * 100);
+      const ex = (w, h) => { const n = eyCountAdm(c, w, h); return n == null ? null : `${w} × ${h}: ${n} eyelet${n === 1 ? '' : 's'}, +$${(amt * n / 100).toFixed(2)} per sign`; };
+      qs('[data-eyex]', it).textContent = rule === 'per_eyelet' ? (ex(600, 400) ? `For example ${ex(600, 400)}; ${ex(1200, 2400)}.` : 'Enter the number or the spacing.')
+        : rule === 'per_sign' ? `Adds $${(amt / 100).toFixed(2)} to each sign.` : ''; };
+    const wire = it => { qsa('select, input', it).forEach(x => x.addEventListener('input', () => { sync(it); G.markDirty(); })); qsa('select', it).forEach(x => x.addEventListener('change', () => sync(it))); sync(it); };
+    qsa('[data-ey]', list).forEach(wire);
+    list.addEventListener('click', e => { const b = e.target.closest('[data-remove]'); if (!b) return; const it = b.closest('[data-ey]');
+      if (qs('[name=eydefault]', it).checked) return toast('Choose another default first.', true);
+      if (it.dataset.ey && !confirm('Remove this choice? Old orders keep showing it. To stop offering it but keep it here, untick "Shown to customers" instead.')) return;
+      it.remove(); G.markDirty(); });
+    sortable(list);
+    qs('#eyAdd', main).onclick = () => { list.insertAdjacentHTML('beforeend', item()); wire(list.lastElementChild); qs('[name=label]', list.lastElementChild).focus(); G.markDirty(); };
+    qs('#eySave', main).onclick = e => busy(e.target, async () => {
+      const items = qsa('[data-ey]', list).map((it, i) => { const g = n => qs(`[name=${n}]`, it); const rule = g('price_rule').value, mode = g('count_mode').value;
+        return { id: it.dataset.ey || null, label: g('label').value.trim(), price_rule: rule, amount: rule === 'none' ? 0 : Math.round((+g('amount').value || 0) * 100) / 100,
+          count_mode: mode, fixed_count: mode === 'fixed' ? (parseInt(g('fixed_count').value, 10) || null) : null,
+          spacing_mm: mode !== 'fixed' ? (parseInt(g('spacing_mm').value, 10) || null) : null, position: i, active: g('active').checked, is_default: g('eydefault').checked }; });
+      if (!items.length) throw new Error('Add at least one choice, for example "No eyelets".');
+      if (items.some(x => !x.label)) throw new Error('Every choice needs a label.');
+      if (new Set(items.map(x => x.label.toLowerCase())).size !== items.length) throw new Error('Two choices have the same label.');
+      const def = items.filter(x => x.is_default); if (def.length !== 1) throw new Error('Choose one default.');
+      if (!def[0].active) throw new Error('The default choice must be shown to customers.');
+      for (const x of items) {
+        if (x.price_rule !== 'none' && !(x.amount > 0)) throw new Error(`Enter an amount for "${x.label}", or set it to No extra charge.`);
+        if (x.amount > 1000) throw new Error(`The amount for "${x.label}" looks too high.`);
+        if (x.price_rule === 'per_eyelet' && x.count_mode === 'fixed' && !(x.fixed_count >= 1 && x.fixed_count <= 200)) throw new Error(`Enter how many eyelets "${x.label}" puts on each sign.`);
+        if (x.count_mode !== 'fixed' && !(x.spacing_mm >= 50 && x.spacing_mm <= 5000)) throw new Error(`Enter the spacing for "${x.label}" in mm (50 to 5000).`);
+      }
+      const keep = new Set(items.map(x => x.id).filter(Boolean)), now = new Date().toISOString();
+      for (const r of rows) if (!keep.has(r.id)) await rest(`eyelet_choices?id=eq.${enc(r.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+      // one default at a time: clear the old default before setting the new one; free up labels before reusing them
+      await rest(`eyelet_choices?is_default=is.true${def[0].id ? `&id=neq.${enc(def[0].id)}` : ''}`, { method: 'PATCH', body: { is_default: false }, prefer: 'return=minimal' });
+      const old = Object.fromEntries(rows.map(r => [r.id, r.label.toLowerCase()]));
+      const swaps = items.filter(x => x.id && old[x.id] !== x.label.toLowerCase());   // renamed: free the old labels first, so two can swap
+      for (const x of swaps) await rest(`eyelet_choices?id=eq.${enc(x.id)}`, { method: 'PATCH', body: { label: `${x.label} (${x.id.slice(0, 8)})` }, prefer: 'return=minimal' });
+      for (const x of items) { const { id, ...body } = x; body.updated_at = now;
+        if (id) await rest(`eyelet_choices?id=eq.${enc(id)}`, { method: 'PATCH', body, prefer: 'return=minimal' });
+        else await rest('eyelet_choices', { method: 'POST', body, prefer: 'return=minimal' }); }
+      G.markClean(); toast('Eyelets saved'); eyeletsPage(main);
+    });
+  }
+  G.section({ id: 'eyelets', label: 'Eyelets', order: 31.6, render: main => eyeletsPage(main) });
 
   /* ---------------- Discount codes ----------------
      Codes are checked and worked out on the shop server; this page only sets them up. One code per order. */
@@ -4303,7 +4402,8 @@ GYA.use({
     rows.products.forEach(r => {
       const p = clean({ s: r.slug, n: r.name, c: r.category_slug, p: +r.base_price, pmax: r.price_max == null ? undefined : +r.price_max,
         d: r.summary, long: r.description_html, unit: r.unit_label, dims: r.wall_dims || undefined, cdims: r.dims_config,
-        tags: r.tags, sold: r.sold_out || undefined, fields: r.personalisation, swatches: r.swatches, pers: r.has_personalisation || undefined, pvText: r.preview_text });
+        tags: r.tags, sold: r.sold_out || undefined, fields: r.personalisation, swatches: r.swatches, pers: r.has_personalisation || undefined, pvText: r.preview_text,
+        ey: r.eyelets || undefined });
       const tiers = T[r.slug]; if (tiers && tiers.length) p.tiers = tiers.sort((a, b) => a.min_qty - b.min_qty).map(t => [t.min_qty, +t.unit_price]);
       const imgs = (I[r.slug] || []).sort(pos); p.img = imgs.map(i => i.url); if (imgs.some(i => i.alt)) p.alts = imgs.map(i => i.alt || '');
       imgs.forEach(i => { if (i.fallback_url) IMG_LIVE[base(i.url)] = i.fallback_url; });
@@ -4507,7 +4607,43 @@ function cdimsCheck(p, w, h){
   return '';
 }
 function customM2(opts){ const m=opts&&String(opts['Custom size']||'').match(/^\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[×xX*]\s*(\d+(?:\.\d+)?)/); return m? (+m[1]*+m[2])/1e6 : 0; }
+/* ---- Eyelets (EYELETS_ENABLED) ----
+   The choices come from the shop server, which also works the price out again at checkout: this copy only
+   shows the customer the count and the cost before they add to cart. Same rule as api/_lib/eyelets.js. */
+const EYE={state:'idle', choices:[], help:''}; let eyeP=null;
+function loadEyelets(){
+  if(!eyeP) eyeP = apiCall('/checkout?action=config').then(c=>{
+    if(c&&c.eyelets&&Array.isArray(c.eyelets.choices)&&c.eyelets.choices.length){ EYE.state='on'; EYE.choices=c.eyelets.choices; EYE.help=c.eyelets.help||''; }
+    else EYE.state='off'; }).catch(()=>{ EYE.state='off'; });
+  return eyeP;
+}
+function eySize(opts){
+  const m=String((opts&&(opts['Custom size']||opts.Size))||'').match(/(\d{1,5}(?:\.\d+)?)\s*(?:mm)?\s*W?\s*[×xX*]\s*(\d{1,5}(?:\.\d+)?)/); if(!m) return null;
+  let w=+m[1], h=+m[2]; const o=String(opts.Orientation||'');
+  if(/portrait/i.test(o)&&w>h) [w,h]=[h,w]; if(/landscape/i.test(o)&&h>w) [w,h]=[h,w];
+  return w>0&&h>0?{w,h}:null;
+}
+function eyCount(c, size){
+  if(c.mode==='fixed') return c.fixed||0;
+  if(!(c.spacing>0)||!size) return null;
+  const sw=Math.max(1,Math.ceil(size.w/c.spacing)), sh=Math.max(1,Math.ceil(size.h/c.spacing));
+  return c.mode==='top' ? sw+1 : 2*(sw+sh);
+}
+/* {c, count, each} for this selection (each in cents per sign; null while the size isn't known yet) */
+function eyQuote(p, opts){
+  if(EYE.state!=='on'||!p||!p.ey||!opts) return null;
+  const want=String(opts.Eyelets||'').trim().toLowerCase();
+  const c = want ? EYE.choices.find(x=>x.label.toLowerCase()===want) : (EYE.choices.find(x=>x.default)||EYE.choices[0]);
+  if(!c) return null;
+  const count=eyCount(c, eySize(opts));
+  const each = c.rule==='per_sign' ? c.amount_cents : c.rule==='per_eyelet' ? (count==null?null:c.amount_cents*count) : 0;
+  return {c, count, each};
+}
 function unitPrice(p, qty, opts){
+  const b=basePrice(p, qty, opts), e=eyQuote(p, opts);
+  return e&&e.each ? Math.round(b*100+e.each)/100 : b;
+}
+function basePrice(p, qty, opts){
   const v = varPrice(p, opts); if(typeof v==='number') return v;
   if(p.dims){ const m2=wallM2(opts); if(m2) return Math.round(m2*p.p*100)/100; }
   if(p.cdims){ const m2=customM2(opts); if(m2) return Math.round(m2*p.p*100)/100; }
@@ -4537,6 +4673,7 @@ function setQty(key, qty){ const l = cart.lines.find(l=>l.key===key); if(!l) ret
 function cartTotal(){ return cart.lines.reduce((s,l)=>s+unitPrice(prod(l.slug),l.qty,l.opts)*l.qty,0); }
 function renderCart(){
   cart.lines = cart.lines.filter(l=>prod(l.slug));   // drop anything no longer sold
+  if(EYE.state==='idle' && cart.lines.some(l=>prod(l.slug).ey)) loadEyelets().then(()=>{ if(EYE.state==='on') renderCart(); });
   saveCart();
   const count = cart.lines.reduce((s,l)=>s+l.qty,0);
   $('#cartCount').textContent = count||'';
@@ -4788,7 +4925,8 @@ function pageProduct(slug){
         ${p.tiers?`<div class="tiers" id="tiers"><div class="row"><span>Quantity</span><span>Each</span><span>Save</span></div>${p.tiers.map(([min,price],i)=>{ const next=p.tiers[i+1]; const label = next? (min===next[0]-1?`${min}`:`${min}–${next[0]-1}`) : `${min}+`; const save=Math.round((1-price/p.p)*100); return `<div class="row" data-min="${min}"><span>${label}</span><span>${money(price)}</span><span class="save">${save?save+'%':'-'}</span></div>`}).join('')}</div>`:''}
         ${p.dims?`<div class="opt"><label>Wall width <span>mm</span></label><input id="dimW" type="number" min="707" placeholder="e.g. 3000" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="opt"><label>Wall height <span>mm</span></label><input id="dimH" type="number" min="707" placeholder="e.g. 2400" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--r)"></div><div class="tpl-links" style="margin:2px 0 6px"><a href="#/product/wallpaper-sample?design=${p.s}">Order a sample · $10, posted in both finishes</a><a href="mailto:info@avantiprint.com.au?subject=${encodeURIComponent('Wallpaper installation enquiry: '+p.n)}">Installation enquiry</a></div>`:''}
         ${p.cdims?`<div class="opt-row"><div class="opt"><label>Width <span>mm${p.cdims.maxW&&p.cdims.maxH?` · up to ${Math.min(p.cdims.maxW,p.cdims.maxH)} × ${Math.max(p.cdims.maxW,p.cdims.maxH)} either way`:p.cdims.maxW?` · max ${p.cdims.maxW}`:''}</span></label><input id="cdW" type="number" min="50" ${p.cdims.maxW&&p.cdims.maxH?`max="${Math.max(p.cdims.maxW,p.cdims.maxH)}"`:p.cdims.maxW?`max="${p.cdims.maxW}"`:''} placeholder="e.g. 600" class="dim-in" inputmode="numeric"></div><div class="opt"><label>Height <span>mm${p.cdims.maxW&&p.cdims.maxH?'':p.cdims.maxH?` · max ${p.cdims.maxH}`:''}</span></label><input id="cdH" type="number" min="50" ${p.cdims.maxW&&p.cdims.maxH?`max="${Math.max(p.cdims.maxW,p.cdims.maxH)}"`:p.cdims.maxH?`max="${p.cdims.maxH}"`:''} placeholder="e.g. 900" class="dim-in" inputmode="numeric"></div></div><p class="cd-msg" id="cdMsg" role="status" aria-live="polite"></p>`:''}
-        ${p.opts?Object.entries(p.opts).map(([k,v])=>(k==='Colour'&&p.swatches)? swatchHTML(k,v,p.swatches) : `<div class="opt"><label>${k}${isPack?'<span>price varies by size</span>':''}</label><select data-opt="${esc(k)}"><option value="">Choose ${k.toLowerCase()}</option>${v.map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`).join(''):''}
+        ${p.opts?Object.entries(p.opts).filter(([k])=>!(p.ey&&k==='Eyelets')).map(([k,v])=>(k==='Colour'&&p.swatches)? swatchHTML(k,v,p.swatches) : `<div class="opt"><label>${k}${isPack?'<span>price varies by size</span>':''}</label><select data-opt="${esc(k)}"><option value="">Choose ${k.toLowerCase()}</option>${v.map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`).join(''):''}
+        ${p.ey?'<div class="opt" id="eyOpt" hidden></div>':''}
         ${p.fields?fieldsHTML(p):''}
         ${(!p.sold&&studioCfg(p))?artPanelHTML(p):''}
         ${TPLS[p.s]?`<div class="tpl-dl" id="tplDl"></div>`:''}
@@ -5077,18 +5215,26 @@ function wireProduct(){
   const studio = $('#artStudio') ? artStudio(p) : null;
   const selOpts=()=>{ const o={}; $$('[data-opt]').forEach(s=>{ if(s.value) o[s.dataset.opt]=s.value; }); return o; };
   const addB=$('#addBtn'), pbox=$('#priceBox'), pboxInit=pbox?pbox.innerHTML:'';
+  // eyelets for the current selection (size and orientation included), in dollars per sign
+  const eyNow=()=>{ if(!p.ey||EYE.state!=='on') return null; const o=selOpts();
+    if(p.cdims){ const w=+$('#cdW').value||0, h=+$('#cdH').value||0; if(w&&h) o['Custom size']=`${w} × ${h} mm`; }
+    if(studio){ try{ const or=studio.collect().orient; if(or) o.Orientation=or; }catch(e){} }
+    return eyQuote(p,o); };
   function upd(){ const q=Math.max(1,+qty.value||1); qty.value=q;
-    const vp = varPrice(p, selOpts()); const exact = typeof vp==='number';
+    const ey=eyNow(), eyD=ey&&ey.each?ey.each/100:0, eyNote=$('#eyNote');
+    if(eyNote) eyNote.textContent = !ey ? '' : ey.c.rule==='per_eyelet' ? (ey.count==null ? (p.cdims?'Enter your width and height to see how many eyelets.':'Choose a size to see how many eyelets.') : `${ey.count} eyelet${ey.count===1?'':'s'} on this size · +${money(eyD)} per sign`)
+      : ey.c.rule==='per_sign' ? `+${money(eyD)} per sign` : '';
+    const vp0 = varPrice(p, selOpts()); const exact = typeof vp0==='number'; const vp = exact ? Math.round((vp0+eyD)*100)/100 : vp0;
     let cdErr='', cdTxt='';
     if(p.cdims){ const w=+$('#cdW').value||0, h=+$('#cdH').value||0, msg=$('#cdMsg'), cp=$('#cdPrice'), cn=$('#cdPriceNote');
       cdErr = (w||h) ? cdimsCheck(p,w,h) : 'Enter your width and height in mm';
       const typing=[document.getElementById('cdW'),document.getElementById('cdH')].includes(document.activeElement) && /smallest/.test(cdErr);
       if(msg){ msg.textContent = (w||h)&&!typing ? cdErr : ''; msg.classList.toggle('bad', !!(w||h) && !!cdErr && !typing); }
-      if(!cdErr){ const m2=(w*h)/1e6, each=unitPrice(p,q,{'Custom size':`${w} × ${h} mm`});
+      if(!cdErr){ const m2=(w*h)/1e6, base=unitPrice(p,q,{'Custom size':`${w} × ${h} mm`}), each=Math.round((base+eyD)*100)/100;
         if(cp) cp.textContent=money(each); if(cn) cn.textContent=`each · ${w} × ${h} mm`;
-        cdTxt=`${w} × ${h} mm = ${(Math.round(m2*10000)/10000).toLocaleString('en-AU',{maximumFractionDigits:4})} m² × ${money(p.p)} per m² = ${money(each)} each<br>${q} × ${money(each)} = <b>${money(each*q)}</b>`; }
+        cdTxt=`${w} × ${h} mm = ${(Math.round(m2*10000)/10000).toLocaleString('en-AU',{maximumFractionDigits:4})} m² × ${money(p.p)} per m² = ${money(base)}${eyD?` + ${money(eyD)} eyelets = ${money(each)}`:''} each<br>${q} × ${money(each)} = <b>${money(each*q)}</b>`; }
       else { if(cp) cp.textContent=money(p.p); if(cn) cn.textContent='per m² · enter your size for the exact price'; } }
-    const u = exact ? vp : unitPrice(p,q); if(unitEl) unitEl.textContent=money(u);
+    const u = exact ? vp : Math.round((unitPrice(p,q)+eyD)*100)/100; if(unitEl) unitEl.textContent=money(u);
     if(VPRICE[p.s] && pbox){
       pbox.innerHTML = exact ? `<span>${money(vp)}</span><small>each · for your selection</small>`
         : vp===undefined ? `<span>Unavailable</span><small>this combination isn't sold online, try another, or contact us</small>` : pboxInit;
@@ -5101,6 +5247,15 @@ function wireProduct(){
   $('#qm').onclick=()=>{qty.value=Math.max(1,+qty.value-1);upd()}; $('#qp').onclick=()=>{qty.value=+qty.value+1;upd()}; qty.oninput=upd;
   $$('#dimW,#dimH,#cdW,#cdH').forEach(i=>i&&i.addEventListener('input',upd)); $$('#cdW,#cdH').forEach(i=>i&&i.addEventListener('blur',()=>setTimeout(()=>{ if(i.isConnected) upd(); },0)));
   $$('[data-opt]').forEach(s=>s.addEventListener('change',upd));
+  // Eyelets: the dropdown from the shop server when switched on, otherwise the product's own plain option (as before)
+  if(p.ey) loadEyelets().then(()=>{ const box=$('#eyOpt'); if(!box||!box.isConnected) return;
+    if(EYE.state==='on'){
+      box.innerHTML=`<label for="eySel">Eyelets</label><select data-opt="Eyelets" id="eySel" aria-describedby="eyHelp eyNote">${EYE.choices.map(c=>`<option${c.default?' selected':''}>${esc(c.label)}</option>`).join('')}</select>
+        <p class="opt-help" id="eyHelp">${esc(EYE.help)}</p><p class="opt-help opt-help-strong" id="eyNote" aria-live="polite"></p>`;
+    } else if(p.opts&&p.opts.Eyelets){
+      box.innerHTML=`<label>Eyelets</label><select data-opt="Eyelets"><option value="">Choose eyelets</option>${p.opts.Eyelets.map(o=>`<option>${esc(o)}</option>`).join('')}</select>`;
+    } else return;
+    box.hidden=false; box.querySelector('select').addEventListener('change',upd); upd(); });
   $$('.sw').forEach(b=>b.onclick=()=>{ const sel=b.closest('.sw-opt').querySelector('select'); sel.value=b.dataset.sw;
     $$('.sw').forEach(x=>x.classList.toggle('on',x===b)); b.setAttribute('aria-checked','true');
     const nm=$('#swName'); if(nm) nm.textContent=b.dataset.sw; sel.dispatchEvent(new Event('change')); });
